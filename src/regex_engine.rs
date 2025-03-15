@@ -29,7 +29,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find() {
+    fn find_test() {
         assert!(true);
     }
 }
