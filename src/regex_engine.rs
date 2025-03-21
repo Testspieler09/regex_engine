@@ -10,17 +10,17 @@ impl Regex {
     pub fn is_match(&self, text: &str) -> bool {
         // TODO: Check if the text matches the regex
         // This should run the finite automaton.
-        true
+        unimplemented!();
     }
 
     pub fn find(&self, text: &str) -> Option<&str> {
         // TODO: Find first match in the text
-        None
+        unimplemented!();
     }
 
     pub fn findall(&self, text: &str) -> Vec<&str> {
         // TODO: Find all matches in the text
-        vec![]
+        unimplemented!();
     }
 }
 
@@ -30,6 +30,6 @@ mod tests {
 
     #[test]
     fn find_test() {
-        assert!(true);
+        unimplemented!();
     }
 }
