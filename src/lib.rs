@@ -1,2 +1,2 @@
-mod regex_engine;
 mod dfa;
+mod regex_engine;

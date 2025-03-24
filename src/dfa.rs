@@ -35,18 +35,15 @@ fn normalize_regex(regex: &str) -> String {
 
         if curr_char == '\\' {
             escape_sequence = true;
-            normalized.push('.');
             normalized.push(curr_char);
             continue;
         }
 
-        // Insert concatenation operator if needed
-        if prev_char != '\0'
-            && ((prev_char.is_alphanumeric() && curr_char.is_alphanumeric()) || // Consecutive literals
-                (prev_char.is_alphanumeric() && curr_char == '(') ||            // Literal + opening parenthesis
-                (prev_char == ')' && curr_char.is_alphanumeric()) ||            // Closing parenthesis + literal
-                (prev_char == '*' && curr_char.is_alphanumeric())) {            // Closing parenthesis + unary operator
-            normalized.push('.');
+        if curr_char == '+' {
+            normalized.push(prev_char);
+            normalized.push('*');
+            prev_char = curr_char;
+            continue;
         }
 
         normalized.push(curr_char);
@@ -67,6 +64,7 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
 
     let mut stack: Vec<NFA> = Vec::new();
     let mut escape_sequence = false;
+    let mut prev_char = '\0';
 
     for letter in normalized_regex.chars() {
         if escape_sequence {
@@ -80,27 +78,31 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
             '*' => {
                 let last_nfa = stack.pop().expect("Expected NFA for Kleene Star");
                 stack.push(apply_kleene_star(&last_nfa));
-            },
-            '.' => {
-                // Concatenate the last two NFAs
-                let right = stack.pop().expect("Expected NFA for concatenation");
-                let left = stack.pop().expect("Expected NFA for concatenation");
-                stack.push(concatenate(&left, &right));
-            },
+            }
             '|' => {
                 // Apply union to the last two NFAs
                 let right = stack.pop().expect("Expected NFA for union");
                 let left = stack.pop().expect("Expected NFA for union");
                 stack.push(union(&left, &right));
-            },
+            }
             '(' | ')' => {
                 // Handle parentheses using the stack, typically you'd handle these with a more complex mechanism.
                 unimplemented!();
-            },
+            }
             _ => {
+                if prev_char != '\0'
+                    && ((prev_char.is_alphanumeric() && letter.is_alphanumeric()) || // Consecutive literals
+                    (prev_char.is_alphanumeric() && letter == '(') ||            // Literal + opening parenthesis
+                    (prev_char == ')' && letter.is_alphanumeric()) ||            // Closing parenthesis + literal
+                    (prev_char == '*' && letter.is_alphanumeric()))
+                {
+                    let right = stack.pop().expect("Expected NFA for concatenation");
+                    let left = stack.pop().expect("Expected NFA for concatenation");
+                    stack.push(concatenate(&left, &right));
+                }
                 // Create a basic NFA for single character
                 stack.push(create_basic_nfa(&letter));
-            },
+            }
         }
 
         created_nfa.alphabet.insert(letter);
@@ -170,19 +172,15 @@ mod tests {
 
     #[test]
     fn test_normalize_regex() {
-        let cases = [
-            (r"a(b|c)*d", r"a.(b|c)*.d"),
-            (r"ab", r"a.b"),
-            (r"abc", r"a.b.c"),
-            (r"(ab)c", r"(a.b).c"),
-            (r"a|(b*c)", r"a|(b*.c)"),
-            (r"", r""),
-            (r"a\*b", r"a.\*.b"),
-        ];
+        let cases = [(r"a+", r"aa*"), (r"a\+", r"a\+")];
 
         for (input, expected) in cases {
             let result = normalize_regex(input);
-            assert_eq!(result, expected, "Normalization failed for input '{}'", input);
+            assert_eq!(
+                result, expected,
+                "Normalization failed for input '{}'",
+                input
+            );
         }
     }
 
