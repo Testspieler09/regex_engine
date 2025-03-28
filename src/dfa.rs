@@ -2,19 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 struct NFA {
-    states: HashSet<u32>,
     alphabet: HashSet<char>,
     transitions: HashMap<(u32, char), Vec<u32>>,
-    start_state: u32,
     accepting_states: HashSet<u32>,
 }
 
 #[derive(Debug)]
 struct DFA {
-    states: HashSet<u32>,
     alphabet: HashSet<char>,
     transitions: HashMap<(u32, char), u32>,
-    start_state: u32,
     accepting_states: HashSet<u32>,
 }
 
@@ -55,10 +51,8 @@ fn normalize_regex(regex: &str) -> String {
 
 fn thompson_construction(normalized_regex: &str) -> NFA {
     let mut created_nfa = NFA {
-        states: HashSet::new(),
         alphabet: HashSet::new(),
         transitions: HashMap::new(),
-        start_state: 0,
         accepting_states: HashSet::new(),
     };
 
@@ -90,18 +84,19 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                 unimplemented!();
             }
             _ => {
+                // Create a basic NFA for single character
+                stack.push(create_basic_nfa(&letter));
+
                 if prev_char != '\0'
-                    && ((prev_char.is_alphanumeric() && letter.is_alphanumeric()) || // Consecutive literals
-                    (prev_char.is_alphanumeric() && letter == '(') ||            // Literal + opening parenthesis
-                    (prev_char == ')' && letter.is_alphanumeric()) ||            // Closing parenthesis + literal
+                    && ((prev_char.is_alphanumeric() && letter.is_alphanumeric()) ||    // Consecutive literals
+                    (prev_char.is_alphanumeric() && letter == '(') ||                   // Literal + opening parenthesis
+                    (prev_char == ')' && letter.is_alphanumeric()) ||                   // Closing parenthesis + literal
                     (prev_char == '*' && letter.is_alphanumeric()))
                 {
                     let right = stack.pop().expect("Expected NFA for concatenation");
                     let left = stack.pop().expect("Expected NFA for concatenation");
                     stack.push(concatenate(&left, &right));
                 }
-                // Create a basic NFA for single character
-                stack.push(create_basic_nfa(&letter));
             }
         }
 
@@ -132,7 +127,6 @@ fn create_basic_nfa(letter: &char) -> NFA {
 }
 
 fn nfa_to_dfa(regex_nfa: &NFA) -> DFA {
-    // TODO: implement this
     unimplemented!()
 }
 
@@ -151,7 +145,7 @@ impl DFA {
     }
 
     pub fn process(&self, input: &str) -> bool {
-        let mut current_state = self.start_state;
+        let mut current_state = 0;
         for c in input.chars() {
             if !self.alphabet.contains(&c) {
                 return false;
@@ -186,21 +180,21 @@ mod tests {
 
     #[test]
     fn create_dfa_test() {
-        todo!();
+        unimplemented!();
     }
 
     #[test]
     fn prozess_function_test() {
-        todo!();
+        unimplemented!();
     }
 
     #[test]
     fn thompson_construction_test() {
-        todo!();
+        unimplemented!();
     }
 
     #[test]
     fn nfa_to_dfa_test() {
-        todo!();
+        unimplemented!();
     }
 }

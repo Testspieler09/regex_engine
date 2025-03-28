@@ -2,21 +2,15 @@
 
 # Regex Engine
 
-This is a simple regex engine implemented in Rust. It is designed to parse and execute regular expressions efficiently.
+> [!WARNING]
+> This project was done for educational purposes only.
+
+This is a very simple regex engine implemented in Rust. It is designed to parse and execute regular expressions.
 
 ## Features
 
 - Supports basic regex syntax including character classes, quantifiers (`*`, `+`), and the `.` wildcard.
 - Converts regex patterns to finite automata for efficient matching.
-
-## Installation
-
-To use the regex engine, add the crate to your `Cargo.toml`:
-
-```toml
-[dependencies]
-regex_engine = "0.1.0"  # Replace with the correct version
-```
 
 ## Usage
 
@@ -47,6 +41,12 @@ fn main() {
 
 - `fn is_match(&self, text: &str) -> bool`
   - Checks if the text matches the regex pattern.
+
+- `fn find(&self, text: &str) -> Option<&str>`
+  - Finds the first match in the text.
+
+- `fn findall(&self, text: &str) -> Vec<&str>`
+  - Finds the first match in the text.
 
 ## Contributing
 
