@@ -2,15 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 struct NFA {
-    alphabet: HashSet<char>,
-    transitions: HashMap<(u32, char), Vec<u32>>,
+    transitions: HashMap<(u32, Option<char>), Vec<u32>>,
     accepting_states: HashSet<u32>,
 }
 
 #[derive(Debug)]
 struct DFA {
-    alphabet: HashSet<char>,
-    transitions: HashMap<(u32, char), u32>,
+    transitions: HashMap<(u32, Option<char>), u32>,
     accepting_states: HashSet<u32>,
 }
 
@@ -49,20 +47,19 @@ fn normalize_regex(regex: &str) -> String {
     normalized
 }
 
-fn thompson_construction(normalized_regex: &str) -> NFA {
-    let mut created_nfa = NFA {
-        alphabet: HashSet::new(),
-        transitions: HashMap::new(),
-        accepting_states: HashSet::new(),
-    };
+// TODO: implement Glushkov Construction as well to benchmark them
 
+// THOMPSON CONSTRUCTION ---
+fn thompson_construction(normalized_regex: &str) -> NFA {
     let mut stack: Vec<NFA> = Vec::new();
     let mut escape_sequence = false;
     let mut prev_char = '\0';
 
     for letter in normalized_regex.chars() {
         if escape_sequence {
-            // TODO: Handle escape sequence
+            // TODO: Handle escape sequence e.g. \w -> [a-zA-Z]
+            // for now however it will just be a normal letter e.g. escaping \|
+            stack.push(create_basic_nfa(&letter));
             escape_sequence = false;
             continue;
         }
@@ -74,7 +71,7 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                 stack.push(apply_kleene_star(&last_nfa));
             }
             '|' => {
-                // Apply union to the last two NFAs
+                // FIX: Apply union to the last NFA and the next one instead of the last two ones
                 let right = stack.pop().expect("Expected NFA for union");
                 let left = stack.pop().expect("Expected NFA for union");
                 stack.push(union(&left, &right));
@@ -99,8 +96,7 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                 }
             }
         }
-
-        created_nfa.alphabet.insert(letter);
+        // TODO: merge the stack into one nfa?!
     }
 
     if stack.len() != 1 {
@@ -111,7 +107,45 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
 }
 
 fn apply_kleene_star(last_nfa: &NFA) -> NFA {
-    unimplemented!()
+    let mut transitions = HashMap::new();
+    let mut accepting_states = HashSet::new();
+
+    // Define new start and end (accepting) states
+    let new_accepting = last_nfa.accepting_states.iter().max().unwrap() + 2;
+
+    // Epsilon transition from new start to original start
+    transitions.insert((0, None), vec![1]);
+
+    // Copy existing transitions, shifting state numbers to make room for new start
+    for ((state, input), targets) in &last_nfa.transitions {
+        // Shift each transition to new indices
+        transitions.insert((state + 1, *input), targets.iter().map(|s| s + 1).collect());
+    }
+
+    // Epsilon transitions returning to original start for loops, and new accepting state
+    for &accepting_state in &last_nfa.accepting_states {
+        transitions
+            .entry((accepting_state + 1, None))
+            .or_insert_with(Vec::new)
+            .push(1);
+
+        transitions
+            .entry((accepting_state + 1, None))
+            .or_insert_with(Vec::new)
+            .push(new_accepting);
+    }
+
+    // Final acceptance state is accepting with epsilon transition from start for empty string
+    accepting_states.insert(new_accepting);
+    transitions
+        .entry((0, None))
+        .or_insert_with(Vec::new)
+        .push(new_accepting);
+
+    NFA {
+        transitions,
+        accepting_states,
+    }
 }
 
 fn union(left: &NFA, right: &NFA) -> NFA {
@@ -123,14 +157,19 @@ fn concatenate(left: &NFA, right: &NFA) -> NFA {
 }
 
 fn create_basic_nfa(letter: &char) -> NFA {
-    unimplemented!()
+    NFA {
+        transitions: HashMap::from([((0, Some(*letter)), vec![1])]),
+        accepting_states: HashSet::from([1]),
+    }
 }
+// END THOMPSON CONSTRUCTION ---
 
 fn nfa_to_dfa(regex_nfa: &NFA) -> DFA {
     unimplemented!()
 }
 
 impl DFA {
+    // TODO: maybe do from NFA instead of regex
     fn new(regex: &str) -> Self {
         // TODO: Maybe optimize regex
         // TODO: Normalize Regex by removing escape sequenzes etc.
@@ -147,10 +186,7 @@ impl DFA {
     pub fn process(&self, input: &str) -> bool {
         let mut current_state = 0;
         for c in input.chars() {
-            if !self.alphabet.contains(&c) {
-                return false;
-            }
-            if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
+            if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
                 current_state = next_state;
             } else {
                 return false;
