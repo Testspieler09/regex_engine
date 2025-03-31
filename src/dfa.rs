@@ -110,7 +110,6 @@ fn apply_kleene_star(last_nfa: &NFA) -> NFA {
     let mut transitions = HashMap::new();
     let mut accepting_states = HashSet::new();
 
-    // Define new start and end (accepting) states
     let new_accepting = last_nfa.accepting_states.iter().max().unwrap() + 2;
 
     // Epsilon transition from new start to original start
@@ -149,11 +148,73 @@ fn apply_kleene_star(last_nfa: &NFA) -> NFA {
 }
 
 fn union(left: &NFA, right: &NFA) -> NFA {
-    unimplemented!()
+    let mut transitions = HashMap::new();
+
+    let num_states_left_nfa = left.accepting_states.iter().max().unwrap();
+    let num_states_right_nfa = right.accepting_states.iter().max().unwrap();
+
+    // Shift the NFA states
+    for ((state, input), targets) in &left.transitions {
+        transitions.insert((state + 1, *input), targets.iter().map(|s| s + 1).collect());
+    }
+
+    for ((state, input), targets) in &right.transitions {
+        transitions.insert(
+            (state + num_states_left_nfa + 2, *input),
+            targets
+                .iter()
+                .map(|s| s + num_states_left_nfa + 2)
+                .collect(),
+        );
+    }
+
+    // Add new start and end state
+    let new_accepting_state = num_states_left_nfa + num_states_right_nfa + 3;
+
+    transitions.insert((0, None), vec![1, num_states_left_nfa + 2]);
+    for &accepting_state in &left.accepting_states {
+        transitions
+            .entry((accepting_state + 1, None))
+            .or_insert_with(Vec::new)
+            .push(new_accepting_state);
+    }
+    for &accepting_state in &right.accepting_states {
+        transitions
+            .entry((accepting_state + num_states_left_nfa + 2, None))
+            .or_insert_with(Vec::new)
+            .push(new_accepting_state);
+    }
+
+    NFA {
+        transitions,
+        accepting_states: HashSet::from([new_accepting_state]),
+    }
 }
 
 fn concatenate(left: &NFA, right: &NFA) -> NFA {
-    unimplemented!()
+    let mut transitions = HashMap::from(left.transitions.clone());
+
+    // HACK: The accepting states are (based on the implementation) the last ones of the NFA
+    // thus it is possible to get the num of states in the first NFA like this
+    let num_states_left_nfa = left.accepting_states.iter().max().unwrap();
+
+    for ((state, input), targets) in &right.transitions {
+        transitions.insert(
+            (state + num_states_left_nfa, *input),
+            targets.iter().map(|s| s + num_states_left_nfa).collect(),
+        );
+    }
+
+    NFA {
+        transitions,
+        accepting_states: HashSet::from(
+            right
+                .accepting_states
+                .iter()
+                .map(|s| s + num_states_left_nfa)
+                .collect::<HashSet<_>>(),
+        ),
+    }
 }
 
 fn create_basic_nfa(letter: &char) -> NFA {
@@ -227,6 +288,67 @@ mod tests {
     #[test]
     fn thompson_construction_test() {
         unimplemented!();
+    }
+
+    #[test]
+    fn create_basic_nfa_test() {
+        let nfa_a = create_basic_nfa(&'a');
+        let expected_transitions = HashMap::from([((0, Some('a')), vec![1])]);
+        let expected_accepting_states: HashSet<u32> = HashSet::from([1]);
+
+        assert_eq!(nfa_a.transitions, expected_transitions);
+        assert_eq!(nfa_a.accepting_states, expected_accepting_states);
+    }
+
+    #[test]
+    fn concatenate_test() {
+        let nfa_a = create_basic_nfa(&'a');
+        let nfa_b = create_basic_nfa(&'b');
+        let concatenated_nfa = concatenate(&nfa_a, &nfa_b);
+
+        let expected_transitions =
+            HashMap::from([((0, Some('a')), vec![1]), ((1, Some('b')), vec![2])]);
+        let expected_accepting_states: HashSet<u32> = HashSet::from([2]);
+
+        assert_eq!(concatenated_nfa.transitions, expected_transitions);
+        assert_eq!(concatenated_nfa.accepting_states, expected_accepting_states);
+    }
+
+    #[test]
+    fn test_apply_kleene_star() {
+        let basic_nfa = create_basic_nfa(&'a');
+        let starred_nfa = apply_kleene_star(&basic_nfa);
+
+        let expected_transitions = HashMap::from([
+            ((0, None), vec![1, 3]),   // Epsilon to start and new accepting
+            ((1, Some('a')), vec![2]), // Original transition
+            ((2, None), vec![1, 3]),   // Loop back and transition to new accepting
+        ]);
+
+        let expected_accepting_states: HashSet<u32> = HashSet::from([3]);
+
+        assert_eq!(starred_nfa.transitions, expected_transitions);
+        assert_eq!(starred_nfa.accepting_states, expected_accepting_states);
+    }
+
+    #[test]
+    fn union_test() {
+        let nfa_a = create_basic_nfa(&'a');
+        let nfa_b = create_basic_nfa(&'b');
+        let union_nfa = union(&nfa_a, &nfa_b);
+
+        let expected_transitions = HashMap::from([
+            ((0, None), vec![1, 3]),   // Combined initial state transitions
+            ((1, Some('a')), vec![2]), // Offset transitions for NFA a
+            ((3, Some('b')), vec![4]), // Offset transitions for NFA b
+            ((2, None), vec![5]),      // Accepting state transition for a
+            ((4, None), vec![5]),      // Accepting state transition for b
+        ]);
+
+        let expected_accepting_states: HashSet<u32> = HashSet::from([5]);
+
+        assert_eq!(union_nfa.transitions, expected_transitions);
+        assert_eq!(union_nfa.accepting_states, expected_accepting_states);
     }
 
     #[test]
