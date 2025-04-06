@@ -1,9 +1,10 @@
+use core::panic;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 struct NFA {
     transitions: HashMap<(u32, Option<char>), Vec<u32>>,
-    accepting_states: HashSet<u32>,
+    accepting_state: u32, // the thompson construction always has one accepting_state
 }
 
 #[derive(Debug)]
@@ -12,9 +13,71 @@ struct DFA {
     accepting_states: HashSet<u32>,
 }
 
+fn is_valid_regex(regex: &str) -> bool {
+    if regex.is_empty() {
+        return false;
+    }
+
+    let mut open_paren_count = 0;
+    let mut last_was_quantifier = false;
+
+    let mut chars = regex.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '(' => {
+                open_paren_count += 1;
+                last_was_quantifier = false;
+            }
+
+            ')' => {
+                if open_paren_count == 0 {
+                    return false;
+                }
+                open_paren_count -= 1;
+                last_was_quantifier = false;
+            }
+
+            '*' | '+' => {
+                // Ensure quantifiers are not the first character and are not repeated
+                if last_was_quantifier || regex.starts_with('*') || regex.starts_with('+') {
+                    return false;
+                }
+                last_was_quantifier = true;
+            }
+
+            '|' => {
+                // Ensure alternation isn't the first or last character
+                if regex.starts_with('|') || chars.peek().is_none() {
+                    return false;
+                }
+                last_was_quantifier = false;
+            }
+
+            '\\' => {
+                // Handle escaped characters: ensure there's a character after the escape
+                if chars.peek().is_none() {
+                    return false;
+                }
+                chars.next(); // Skip the escaped character
+                last_was_quantifier = false;
+            }
+
+            _ => {
+                last_was_quantifier = false;
+            }
+        }
+    }
+
+    open_paren_count == 0
+}
+
 fn normalize_regex(regex: &str) -> String {
     // TODO: Implement further parsing features here or in a separat function
     // e.g. a+ -> aa*
+    if !is_valid_regex(regex) {
+        panic!("{} is not a valid regular expression!", regex);
+    }
+
     let mut normalized = String::new();
     let mut escape_sequence = false;
     let mut prev_char = '\0';
@@ -39,6 +102,32 @@ fn normalize_regex(regex: &str) -> String {
             prev_char = curr_char;
             continue;
         }
+        if curr_char == '?' {
+            match prev_char {
+                ')' => {
+                    let mut balance = 0;
+
+                    for j in (0..normalized.len()).rev() {
+                        let ch = normalized.chars().nth(j).unwrap();
+                        if ch == ')' {
+                            balance += 1;
+                        } else if ch == '(' {
+                            balance -= 1;
+                            if balance == 0 {
+                                normalized.insert(j, '(');
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    normalized.insert(normalized.len() - 1, '(');
+                }
+            }
+            normalized.push_str("|())");
+            prev_char = curr_char;
+            continue;
+        }
 
         normalized.push(curr_char);
         prev_char = curr_char;
@@ -47,19 +136,22 @@ fn normalize_regex(regex: &str) -> String {
     normalized
 }
 
-// TODO: implement Glushkov Construction as well to benchmark them
+// TODO: Implement Glushkov Construction as well to benchmark them
 
 // THOMPSON CONSTRUCTION ---
 fn thompson_construction(normalized_regex: &str) -> NFA {
-    let mut stack: Vec<NFA> = Vec::new();
+    let mut operators: Vec<char> = Vec::new();
+    let mut nfa_concat_stack: Vec<NFA> = Vec::new();
+    let mut tmp_concat_stack: Vec<NFA> = Vec::new();
+    let mut concat_flag: bool = false;
     let mut escape_sequence = false;
-    let mut prev_char = '\0';
+    let prev_char = '\0';
 
     for letter in normalized_regex.chars() {
         if escape_sequence {
             // TODO: Handle escape sequence e.g. \w -> [a-zA-Z]
             // for now however it will just be a normal letter e.g. escaping \|
-            stack.push(create_basic_nfa(&letter));
+            nfa_concat_stack.push(create_basic_nfa(&letter));
             escape_sequence = false;
             continue;
         }
@@ -67,50 +159,47 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
         match letter {
             '\\' => escape_sequence = true,
             '*' => {
-                let last_nfa = stack.pop().expect("Expected NFA for Kleene Star");
-                stack.push(apply_kleene_star(&last_nfa));
+                let last_nfa = nfa_concat_stack
+                    .pop()
+                    .expect("Expected NFA for Kleene Star");
+                nfa_concat_stack.push(apply_kleene_star(&last_nfa));
+                concat_flag = true;
             }
             '|' => {
                 // FIX: Apply union to the last NFA and the next one instead of the last two ones
-                let right = stack.pop().expect("Expected NFA for union");
-                let left = stack.pop().expect("Expected NFA for union");
-                stack.push(union(&left, &right));
+                let right = nfa_concat_stack.pop().expect("Expected NFA for union");
+                let left = nfa_concat_stack.pop().expect("Expected NFA for union");
+                nfa_concat_stack.push(union(&left, &right));
             }
-            '(' | ')' => {
-                // Handle parentheses using the stack, typically you'd handle these with a more complex mechanism.
+            '(' => {
+                unimplemented!();
+            }
+            ')' => {
                 unimplemented!();
             }
             _ => {
                 // Create a basic NFA for single character
-                stack.push(create_basic_nfa(&letter));
-
-                if prev_char != '\0'
-                    && ((prev_char.is_alphanumeric() && letter.is_alphanumeric()) ||    // Consecutive literals
-                    (prev_char.is_alphanumeric() && letter == '(') ||                   // Literal + opening parenthesis
-                    (prev_char == ')' && letter.is_alphanumeric()) ||                   // Closing parenthesis + literal
-                    (prev_char == '*' && letter.is_alphanumeric()))
-                {
-                    let right = stack.pop().expect("Expected NFA for concatenation");
-                    let left = stack.pop().expect("Expected NFA for concatenation");
-                    stack.push(concatenate(&left, &right));
+                nfa_concat_stack.push(create_basic_nfa(&letter));
+                if concat_flag {
+                    operators.push('.');
+                } else {
+                    concat_flag = true;
                 }
             }
         }
-        // TODO: merge the stack into one nfa?!
     }
 
-    if stack.len() != 1 {
+    if nfa_concat_stack.len() != 1 {
         panic!("Invalid Regex, unexpected final NFA stack size");
     }
 
-    stack.pop().unwrap()
+    nfa_concat_stack.pop().unwrap()
 }
 
 fn apply_kleene_star(last_nfa: &NFA) -> NFA {
     let mut transitions = HashMap::new();
-    let mut accepting_states = HashSet::new();
 
-    let new_accepting = last_nfa.accepting_states.iter().max().unwrap() + 2;
+    let new_accepting = last_nfa.accepting_state + 2;
 
     // Epsilon transition from new start to original start
     transitions.insert((0, None), vec![1]);
@@ -122,20 +211,17 @@ fn apply_kleene_star(last_nfa: &NFA) -> NFA {
     }
 
     // Epsilon transitions returning to original start for loops, and new accepting state
-    for &accepting_state in &last_nfa.accepting_states {
-        transitions
-            .entry((accepting_state + 1, None))
-            .or_insert_with(Vec::new)
-            .push(1);
+    transitions
+        .entry((&last_nfa.accepting_state + 1, None))
+        .or_insert_with(Vec::new)
+        .push(1);
 
-        transitions
-            .entry((accepting_state + 1, None))
-            .or_insert_with(Vec::new)
-            .push(new_accepting);
-    }
+    transitions
+        .entry((&last_nfa.accepting_state + 1, None))
+        .or_insert_with(Vec::new)
+        .push(new_accepting);
 
     // Final acceptance state is accepting with epsilon transition from start for empty string
-    accepting_states.insert(new_accepting);
     transitions
         .entry((0, None))
         .or_insert_with(Vec::new)
@@ -143,15 +229,15 @@ fn apply_kleene_star(last_nfa: &NFA) -> NFA {
 
     NFA {
         transitions,
-        accepting_states,
+        accepting_state: new_accepting,
     }
 }
 
 fn union(left: &NFA, right: &NFA) -> NFA {
     let mut transitions = HashMap::new();
 
-    let num_states_left_nfa = left.accepting_states.iter().max().unwrap();
-    let num_states_right_nfa = right.accepting_states.iter().max().unwrap();
+    let num_states_left_nfa = left.accepting_state;
+    let num_states_right_nfa = right.accepting_state;
 
     // Shift the NFA states
     for ((state, input), targets) in &left.transitions {
@@ -172,22 +258,18 @@ fn union(left: &NFA, right: &NFA) -> NFA {
     let new_accepting_state = num_states_left_nfa + num_states_right_nfa + 3;
 
     transitions.insert((0, None), vec![1, num_states_left_nfa + 2]);
-    for &accepting_state in &left.accepting_states {
-        transitions
-            .entry((accepting_state + 1, None))
-            .or_insert_with(Vec::new)
-            .push(new_accepting_state);
-    }
-    for &accepting_state in &right.accepting_states {
-        transitions
-            .entry((accepting_state + num_states_left_nfa + 2, None))
-            .or_insert_with(Vec::new)
-            .push(new_accepting_state);
-    }
+    transitions
+        .entry((&left.accepting_state + 1, None))
+        .or_insert_with(Vec::new)
+        .push(new_accepting_state);
+    transitions
+        .entry((&right.accepting_state + num_states_left_nfa + 2, None))
+        .or_insert_with(Vec::new)
+        .push(new_accepting_state);
 
     NFA {
         transitions,
-        accepting_states: HashSet::from([new_accepting_state]),
+        accepting_state: new_accepting_state,
     }
 }
 
@@ -196,7 +278,7 @@ fn concatenate(left: &NFA, right: &NFA) -> NFA {
 
     // HACK: The accepting states are (based on the implementation) the last ones of the NFA
     // thus it is possible to get the num of states in the first NFA like this
-    let num_states_left_nfa = left.accepting_states.iter().max().unwrap();
+    let num_states_left_nfa = left.accepting_state;
 
     for ((state, input), targets) in &right.transitions {
         transitions.insert(
@@ -207,20 +289,14 @@ fn concatenate(left: &NFA, right: &NFA) -> NFA {
 
     NFA {
         transitions,
-        accepting_states: HashSet::from(
-            right
-                .accepting_states
-                .iter()
-                .map(|s| s + num_states_left_nfa)
-                .collect::<HashSet<_>>(),
-        ),
+        accepting_state: right.accepting_state + num_states_left_nfa,
     }
 }
 
 fn create_basic_nfa(letter: &char) -> NFA {
     NFA {
         transitions: HashMap::from([((0, Some(*letter)), vec![1])]),
-        accepting_states: HashSet::from([1]),
+        accepting_state: 1,
     }
 }
 // END THOMPSON CONSTRUCTION ---
@@ -262,8 +338,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_normalize_regex() {
-        let cases = [(r"a+", r"aa*"), (r"a\+", r"a\+")];
+    fn valid_regex_basic_test() {
+        let regex = "(a|b)*";
+        assert!(is_valid_regex(regex), "Expected valid regex.");
+    }
+
+    #[test]
+    fn invalid_empty_regex_test() {
+        let regex = "";
+        assert!(!is_valid_regex(regex), "Expected invalid regex (empty).");
+    }
+
+    #[test]
+    fn invalid_unbalanced_parentheses_test() {
+        let regex1 = "(a|b";
+        let regex2 = "a|b)";
+        assert!(
+            !is_valid_regex(regex1),
+            "Expected invalid regex (unbalanced parentheses)."
+        );
+        assert!(
+            !is_valid_regex(regex2),
+            "Expected invalid regex (unbalanced parentheses)."
+        );
+    }
+
+    #[test]
+    fn invalid_operator_placement_test() {
+        let regex1 = "*a";
+        let regex2 = "|a|b";
+        assert!(
+            !is_valid_regex(regex1),
+            "Expected invalid regex (invalid quantifier placement)."
+        );
+        assert!(
+            !is_valid_regex(regex2),
+            "Expected invalid regex (invalid alternation placement)."
+        );
+    }
+
+    #[test]
+    fn valid_nested_parentheses_test() {
+        let regex = "((a|b)*c)";
+        assert!(
+            is_valid_regex(regex),
+            "Expected valid regex with nested parentheses."
+        );
+    }
+
+    #[test]
+    fn valid_escape_sequence_test() {
+        let regex = "a\\*b";
+        assert!(
+            is_valid_regex(regex),
+            "Expected valid regex with escape sequence."
+        );
+    }
+
+    #[test]
+    fn invalid_escape_sequence_test() {
+        let regex = "a\\";
+        assert!(
+            !is_valid_regex(regex),
+            "Expected invalid regex with unpaired escape."
+        );
+    }
+
+    #[test]
+    fn normalize_regex_test() {
+        let cases = [
+            (r"a+", r"aa*"),
+            (r"a\+", r"a\+"),
+            (r"a?", r"(a|())"),
+            (r"a\?", r"a\?"),
+            (r"(ab)?", r"((ab)|())"),
+        ];
 
         for (input, expected) in cases {
             let result = normalize_regex(input);
@@ -294,10 +443,10 @@ mod tests {
     fn create_basic_nfa_test() {
         let nfa_a = create_basic_nfa(&'a');
         let expected_transitions = HashMap::from([((0, Some('a')), vec![1])]);
-        let expected_accepting_states: HashSet<u32> = HashSet::from([1]);
+        let expected_accepting_state: u32 = 1;
 
         assert_eq!(nfa_a.transitions, expected_transitions);
-        assert_eq!(nfa_a.accepting_states, expected_accepting_states);
+        assert_eq!(nfa_a.accepting_state, expected_accepting_state);
     }
 
     #[test]
@@ -308,14 +457,14 @@ mod tests {
 
         let expected_transitions =
             HashMap::from([((0, Some('a')), vec![1]), ((1, Some('b')), vec![2])]);
-        let expected_accepting_states: HashSet<u32> = HashSet::from([2]);
+        let expected_accepting_state: u32 = 2;
 
         assert_eq!(concatenated_nfa.transitions, expected_transitions);
-        assert_eq!(concatenated_nfa.accepting_states, expected_accepting_states);
+        assert_eq!(concatenated_nfa.accepting_state, expected_accepting_state);
     }
 
     #[test]
-    fn test_apply_kleene_star() {
+    fn apply_kleene_star_test() {
         let basic_nfa = create_basic_nfa(&'a');
         let starred_nfa = apply_kleene_star(&basic_nfa);
 
@@ -325,10 +474,10 @@ mod tests {
             ((2, None), vec![1, 3]),   // Loop back and transition to new accepting
         ]);
 
-        let expected_accepting_states: HashSet<u32> = HashSet::from([3]);
+        let expected_accepting_state: u32 = 3;
 
         assert_eq!(starred_nfa.transitions, expected_transitions);
-        assert_eq!(starred_nfa.accepting_states, expected_accepting_states);
+        assert_eq!(starred_nfa.accepting_state, expected_accepting_state);
     }
 
     #[test]
@@ -345,10 +494,10 @@ mod tests {
             ((4, None), vec![5]),      // Accepting state transition for b
         ]);
 
-        let expected_accepting_states: HashSet<u32> = HashSet::from([5]);
+        let expected_accepting_state: u32 = 5;
 
         assert_eq!(union_nfa.transitions, expected_transitions);
-        assert_eq!(union_nfa.accepting_states, expected_accepting_states);
+        assert_eq!(union_nfa.accepting_state, expected_accepting_state);
     }
 
     #[test]
