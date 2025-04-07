@@ -1,7 +1,7 @@
 use core::panic;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct NFA {
     transitions: HashMap<(u32, Option<char>), Vec<u32>>,
     accepting_state: u32, // the thompson construction always has one accepting_state
@@ -145,7 +145,6 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
     let mut tmp_concat_stack: Vec<NFA> = Vec::new();
     let mut concat_flag: bool = false;
     let mut escape_sequence = false;
-    let prev_char = '\0';
 
     for letter in normalized_regex.chars() {
         if escape_sequence {
@@ -166,16 +165,71 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                 concat_flag = true;
             }
             '|' => {
-                // FIX: Apply union to the last NFA and the next one instead of the last two ones
-                let right = nfa_concat_stack.pop().expect("Expected NFA for union");
-                let left = nfa_concat_stack.pop().expect("Expected NFA for union");
-                nfa_concat_stack.push(union(&left, &right));
+                operators.push('|');
+                concat_flag = false;
             }
             '(' => {
-                unimplemented!();
+                concat_flag = false;
+                while let Some(&top_operator) = operators.last() {
+                    if top_operator == '(' {
+                        break;
+                    }
+
+                    let op: Option<char> = operators.pop();
+
+                    if op == Some('.') {
+                        let nfa_left = nfa_concat_stack
+                            .pop()
+                            .expect("Expected NFA for concatenation");
+                        let nfa_right = nfa_concat_stack
+                            .pop()
+                            .expect("Expected NFA for concatenation");
+                        nfa_concat_stack.push(concatenate(&nfa_left, &nfa_right));
+                    } else if op == Some('|') {
+                        let nfa_right = nfa_concat_stack.pop().expect("Expected NFA for union");
+                        if operators.last() == Some(&'.') {
+                            tmp_concat_stack
+                                .push(nfa_concat_stack.pop().expect("Expected an operand"));
+
+                            while operators.last() == Some(&'.') {
+                                tmp_concat_stack
+                                    .push(nfa_concat_stack.pop().expect("Expected an operand"));
+                                operators.pop(); // Remove the '.' operator
+                            }
+
+                            let mut nfa_left = concatenate(
+                                &tmp_concat_stack
+                                    .pop()
+                                    .expect("Expected NFA from concat stack"),
+                                &tmp_concat_stack
+                                    .pop()
+                                    .expect("Expected NFA from concat stack"),
+                            );
+
+                            while !tmp_concat_stack.is_empty() {
+                                nfa_left = concatenate(
+                                    &nfa_left,
+                                    &tmp_concat_stack
+                                        .pop()
+                                        .expect("Expected NFA from concat stack"),
+                                );
+                            }
+
+                            nfa_concat_stack.push(union(&nfa_left, &nfa_right));
+                        } else {
+                            if let Some(nfa_left) = nfa_concat_stack.pop() {
+                                nfa_concat_stack.push(union(&nfa_left, &nfa_right));
+                            } else {
+                                panic!("Expected operand to form the union!");
+                            }
+                        }
+                    } else {
+                        panic!("Expected at least one operand to process NFA");
+                    }
+                }
             }
             ')' => {
-                unimplemented!();
+                continue;
             }
             _ => {
                 // Create a basic NFA for single character
@@ -186,6 +240,60 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                     concat_flag = true;
                 }
             }
+        }
+    }
+
+    while !operators.is_empty() {
+        let mut nfa_left;
+        let op: Option<char> = operators.pop();
+        if op == Some('.') {
+            let nfa_right = nfa_concat_stack
+                .pop()
+                .expect("Expected NFA for concatenation");
+            let nfa_left = nfa_concat_stack
+                .pop()
+                .expect("Expected NFA for concatenation");
+            nfa_concat_stack.push(concatenate(&nfa_left, &nfa_right));
+        } else if op == Some('|') {
+            let nfa_right = nfa_concat_stack
+                .pop()
+                .expect("Expected NFA for concatenation");
+            if operators.last() == Some(&'.') {
+                tmp_concat_stack.push(
+                    nfa_concat_stack
+                        .pop()
+                        .expect("Expected a NFA for temporary concat stack"),
+                );
+                while operators.last() == Some(&'.') {
+                    tmp_concat_stack.push(
+                        nfa_concat_stack
+                            .pop()
+                            .expect("Expected a NFA for temporary concat stack"),
+                    );
+                    operators.pop();
+                }
+                nfa_left = concatenate(
+                    &tmp_concat_stack
+                        .pop()
+                        .expect("Expected a NFA for the concatenation"),
+                    &tmp_concat_stack
+                        .pop()
+                        .expect("Expected a NFA for the concatenation"),
+                );
+                while !tmp_concat_stack.is_empty() {
+                    nfa_left = concatenate(
+                        &nfa_left,
+                        &tmp_concat_stack
+                            .pop()
+                            .expect("Expected a NFA for the concatenation"),
+                    );
+                }
+            } else {
+                nfa_left = nfa_concat_stack
+                    .pop()
+                    .expect("Expected a NFA for the union");
+            }
+            nfa_concat_stack.push(union(&nfa_left, &nfa_right));
         }
     }
 
@@ -430,13 +538,24 @@ mod tests {
     }
 
     #[test]
-    fn prozess_function_test() {
+    fn prozess_regex_test() {
         unimplemented!();
     }
 
     #[test]
     fn thompson_construction_test() {
-        unimplemented!();
+        let regex_nfa = thompson_construction("(a|b)*");
+        let expected_nfa = NFA {
+            transitions: HashMap::from([
+                ((0, None), vec![1, 3]),
+                ((1, Some('a')), vec![2]),
+                ((2, None), vec![3]),
+                ((3, Some('b')), vec![4]),
+                ((4, None), vec![3]),
+            ]),
+            accepting_state: 4,
+        };
+        assert_eq!(regex_nfa, expected_nfa);
     }
 
     #[test]
