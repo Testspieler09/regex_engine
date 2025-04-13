@@ -1,14 +1,14 @@
 use core::panic;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct NFA {
     transitions: HashMap<(u32, Option<char>), Vec<u32>>,
     accepting_state: u32, // the thompson construction always has one accepting_state
 }
 
 #[derive(Debug)]
-struct DFA {
+pub struct DFA {
     transitions: HashMap<(u32, Option<char>), u32>,
     accepting_states: HashSet<u32>,
 }
@@ -299,24 +299,105 @@ fn create_basic_nfa(letter: &char) -> NFA {
 }
 // END THOMPSON CONSTRUCTION ---
 
-fn nfa_to_dfa(regex_nfa: &NFA) -> DFA {
-    unimplemented!()
+// NFA to DFA functions ---
+fn epsilon_closure(nfa: &NFA, states: &HashSet<u32>) -> HashSet<u32> {
+    let mut closure = states.clone();
+    let mut stack = states.clone();
+
+    while let Some(&state_id) = stack.iter().next() {
+        stack.remove(&state_id);
+        if let Some(epsilon_states) = nfa.transitions.get(&(state_id, None)) {
+            for &next_state in epsilon_states {
+                if closure.insert(next_state) {
+                    stack.insert(next_state);
+                }
+            }
+        }
+    }
+
+    closure
 }
+
+fn move_nfa(nfa: &NFA, states: &HashSet<u32>, symbol: char) -> HashSet<u32> {
+    let mut move_states = HashSet::new();
+
+    for &state in states {
+        if let Some(next_states) = nfa.transitions.get(&(state, Some(symbol))) {
+            move_states.extend(next_states);
+        }
+    }
+
+    move_states
+}
+
+fn hash_set_to_sorted_vec(set: &HashSet<u32>) -> Vec<u32> {
+    let mut vec: Vec<u32> = set.iter().cloned().collect();
+    vec.sort_unstable();
+    vec
+}
+
+fn nfa_to_dfa(nfa: &NFA) -> DFA {
+    // Start from the initial state of the NFA, assuming it's state 0
+    let start_closure = epsilon_closure(nfa, &HashSet::from([0]));
+    let mut state_map = HashMap::new();
+    let mut dfa_states = vec![start_closure.clone()];
+    let mut dfa_accepting_states = HashSet::new();
+    let mut transitions = HashMap::new();
+    let mut unmarked_states = vec![start_closure];
+
+    // Map the initial DFA state from the initial NFA state closure
+    state_map.insert(hash_set_to_sorted_vec(&dfa_states[0]), 0);
+
+    while let Some(current_closure) = unmarked_states.pop() {
+        let current_dfa_state_id = state_map[&hash_set_to_sorted_vec(&current_closure)];
+
+        let is_accepting = current_closure.contains(&nfa.accepting_state);
+        if is_accepting {
+            dfa_accepting_states.insert(current_dfa_state_id);
+        }
+
+        // Collect symbols from transitions
+        let symbols: HashSet<_> = nfa
+            .transitions
+            .keys()
+            .filter_map(|(_, symbol)| *symbol)
+            .collect();
+
+        for symbol in symbols {
+            let move_closure = epsilon_closure(nfa, &move_nfa(nfa, &current_closure, symbol));
+            let sorted_vec = hash_set_to_sorted_vec(&move_closure);
+
+            if !move_closure.is_empty() {
+                let next_dfa_state_id = state_map.len() as u32;
+
+                // Insert new DFA state if isn't already mapped
+                if !state_map.contains_key(&sorted_vec) {
+                    state_map.insert(sorted_vec.clone(), next_dfa_state_id);
+                    dfa_states.push(move_closure.clone());
+                    unmarked_states.push(move_closure);
+                }
+
+                transitions.insert((current_dfa_state_id, Some(symbol)), state_map[&sorted_vec]);
+            }
+        }
+    }
+
+    DFA {
+        transitions,
+        accepting_states: dfa_accepting_states,
+    }
+}
+// END NFA to DFA functions ---
 
 impl DFA {
     // TODO: maybe do from NFA instead of regex
-    fn new(regex: &str) -> Self {
-        // TODO: Maybe optimize regex
-        // TODO: Normalize Regex by removing escape sequenzes etc.
-        // -> Regex only consisting of () | * and a . for seperating the groups afterwards
+    pub fn new(regex: &str) -> Self {
         if !is_valid_regex(regex) {
             panic!("{} is not a valid regular expression!", regex);
         }
 
         let normalized_regex = normalize_regex(&regex);
-        // TODO: Implement Thompson construction
         let regex_nfa: NFA = thompson_construction(&normalized_regex);
-        // TODO: Maybe optimize nfa
         // TODO: Converting NFA to DFA
         nfa_to_dfa(&regex_nfa)
         // TODO: Optimize dfa
@@ -428,12 +509,41 @@ mod tests {
 
     #[test]
     fn create_dfa_test() {
-        unimplemented!();
+        let generated_dfa = DFA::new("(a|b)*");
+        let expected_options = vec![
+            HashMap::from([
+                ((0, Some('a')), 1),
+                ((0, Some('b')), 2),
+                ((1, Some('a')), 1),
+                ((1, Some('b')), 2),
+                ((2, Some('a')), 1),
+                ((2, Some('b')), 2),
+            ]),
+            HashMap::from([
+                ((0, Some('a')), 2),
+                ((0, Some('b')), 1),
+                ((1, Some('a')), 2),
+                ((1, Some('b')), 1),
+                ((2, Some('a')), 2),
+                ((2, Some('b')), 1),
+            ]),
+        ];
+        let expected_accepting_states = HashSet::from([0, 1, 2]);
+
+        assert!(
+            expected_options.contains(&generated_dfa.transitions),
+            "Transitions did not match any of the expected options."
+        );
+        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
     }
 
     #[test]
     fn prozess_regex_test() {
-        unimplemented!();
+        let generated_dfa = DFA::new("(a|b)*");
+        let test_strings = vec!["abbbababaaaa", ""];
+        for string in test_strings {
+            assert!(generated_dfa.process(string));
+        }
     }
 
     #[test]
@@ -500,7 +610,25 @@ mod tests {
     #[test]
     fn thompson_construction_test() {
         let regex_nfa = thompson_construction("(a|b)*");
-        let expected_nfa = NFA {
+
+        let expected_transitions = HashMap::from([
+            ((0, None), vec![1, 7]),
+            ((1, None), vec![2, 4]),
+            ((2, Some('a')), vec![3]),
+            ((3, None), vec![6]),
+            ((4, Some('b')), vec![5]),
+            ((5, None), vec![6]),
+            ((6, None), vec![1, 7]),
+        ]);
+        let expected_accepting_state = 7;
+
+        assert_eq!(regex_nfa.transitions, expected_transitions);
+        assert_eq!(regex_nfa.accepting_state, expected_accepting_state);
+    }
+
+    #[test]
+    fn nfa_to_dfa_test() {
+        let input_nfa = NFA {
             transitions: HashMap::from([
                 ((0, None), vec![1, 7]),
                 ((1, None), vec![2, 4]),
@@ -512,11 +640,33 @@ mod tests {
             ]),
             accepting_state: 7,
         };
-        assert_eq!(regex_nfa, expected_nfa);
-    }
 
-    #[test]
-    fn nfa_to_dfa_test() {
-        unimplemented!();
+        let generated_dfa = nfa_to_dfa(&input_nfa);
+
+        let expected_options = vec![
+            HashMap::from([
+                ((0, Some('a')), 1),
+                ((0, Some('b')), 2),
+                ((1, Some('a')), 1),
+                ((1, Some('b')), 2),
+                ((2, Some('a')), 1),
+                ((2, Some('b')), 2),
+            ]),
+            HashMap::from([
+                ((0, Some('a')), 2),
+                ((0, Some('b')), 1),
+                ((1, Some('a')), 2),
+                ((1, Some('b')), 1),
+                ((2, Some('a')), 2),
+                ((2, Some('b')), 1),
+            ]),
+        ];
+        let expected_accepting_states = HashSet::from([0, 1, 2]);
+
+        assert!(
+            expected_options.contains(&generated_dfa.transitions),
+            "Transitions did not match any of the expected options."
+        );
+        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
     }
 }
