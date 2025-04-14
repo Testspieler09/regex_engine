@@ -389,8 +389,100 @@ fn nfa_to_dfa(nfa: &NFA) -> DFA {
 }
 // END NFA to DFA functions ---
 
+fn optimise_dfa(dfa: &DFA) -> DFA {
+    let mut partition: Vec<HashSet<u32>> = vec![dfa.accepting_states.clone()];
+    let mut non_accepting_states: HashSet<u32> = HashSet::new();
+
+    for (&(state, _), _) in &dfa.transitions {
+        if !dfa.accepting_states.contains(&state) {
+            non_accepting_states.insert(state);
+        }
+    }
+
+    if !non_accepting_states.is_empty() {
+        partition.push(non_accepting_states);
+    }
+
+    let mut worklist: Vec<HashSet<u32>> = partition.clone();
+    let mut new_partition: Vec<HashSet<u32>> = partition.clone();
+
+    while let Some(current_partition) = worklist.pop() {
+        let mut states_to_check = HashMap::new();
+
+        for (&(source_state, symbol), &target_state) in &dfa.transitions {
+            if current_partition.contains(&target_state) {
+                states_to_check
+                    .entry(symbol)
+                    .or_insert_with(HashSet::new)
+                    .insert(source_state);
+            }
+        }
+
+        for &symbol in states_to_check.keys() {
+            let states_to_split = &states_to_check[&symbol];
+
+            let mut involved_partitions = Vec::new();
+
+            for part in &new_partition {
+                let intersection: HashSet<u32> =
+                    part.intersection(states_to_split).cloned().collect();
+
+                if !intersection.is_empty() && intersection.len() != part.len() {
+                    involved_partitions.push(part.clone());
+                }
+            }
+
+            for part in involved_partitions {
+                let intersection: HashSet<u32> =
+                    part.intersection(states_to_split).cloned().collect();
+                let difference: HashSet<u32> = part.difference(states_to_split).cloned().collect();
+
+                new_partition.retain(|p| p != &part);
+                new_partition.push(intersection.clone());
+                new_partition.push(difference.clone());
+
+                if worklist.contains(&part) {
+                    worklist.retain(|p| p != &part);
+                    worklist.push(intersection);
+                    worklist.push(difference);
+                } else if intersection.len() < difference.len() {
+                    worklist.push(intersection);
+                } else {
+                    worklist.push(difference);
+                }
+            }
+        }
+    }
+
+    // Construct new minimized DFA
+    let mut minimal_transitions = HashMap::new();
+    let mut minimal_accepting_states = HashSet::new();
+    let state_mapping: HashMap<u32, u32> = new_partition
+        .iter()
+        .enumerate()
+        .map(|(i, part)| part.iter().map(move |&state| (state, i as u32)))
+        .flatten()
+        .collect();
+
+    for (&(source_state, symbol), &target_state) in &dfa.transitions {
+        if let Some(&new_target_state) = state_mapping.get(&target_state) {
+            minimal_transitions.insert((state_mapping[&source_state], symbol), new_target_state);
+        }
+    }
+
+    for &accepting_state in &dfa.accepting_states {
+        if let Some(&new_accept_state) = state_mapping.get(&accepting_state) {
+            minimal_accepting_states.insert(new_accept_state);
+        }
+    }
+
+    DFA {
+        transitions: minimal_transitions,
+        accepting_states: minimal_accepting_states,
+    }
+}
+
 impl DFA {
-    // TODO: maybe do from NFA instead of regex
     pub fn new(regex: &str) -> Self {
         if !is_valid_regex(regex) {
             panic!("{} is not a valid regular expression!", regex);
@@ -398,9 +490,8 @@ impl DFA {
 
         let normalized_regex = normalize_regex(&regex);
         let regex_nfa: NFA = thompson_construction(&normalized_regex);
-        // TODO: Converting NFA to DFA
-        nfa_to_dfa(&regex_nfa)
-        // TODO: Optimize dfa
+        let regex_dfa = nfa_to_dfa(&regex_nfa);
+        optimise_dfa(&regex_dfa)
     }
 
     pub fn process(&self, input: &str) -> bool {
@@ -510,30 +601,10 @@ mod tests {
     #[test]
     fn create_dfa_test() {
         let generated_dfa = DFA::new("(a|b)*");
-        let expected_options = vec![
-            HashMap::from([
-                ((0, Some('a')), 1),
-                ((0, Some('b')), 2),
-                ((1, Some('a')), 1),
-                ((1, Some('b')), 2),
-                ((2, Some('a')), 1),
-                ((2, Some('b')), 2),
-            ]),
-            HashMap::from([
-                ((0, Some('a')), 2),
-                ((0, Some('b')), 1),
-                ((1, Some('a')), 2),
-                ((1, Some('b')), 1),
-                ((2, Some('a')), 2),
-                ((2, Some('b')), 1),
-            ]),
-        ];
-        let expected_accepting_states = HashSet::from([0, 1, 2]);
+        let expected_transitions = HashMap::from([((0, Some('a')), 0), ((0, Some('b')), 0)]);
+        let expected_accepting_states = HashSet::from([0]);
 
-        assert!(
-            expected_options.contains(&generated_dfa.transitions),
-            "Transitions did not match any of the expected options."
-        );
+        assert_eq!(expected_transitions, generated_dfa.transitions);
         assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
     }
 
