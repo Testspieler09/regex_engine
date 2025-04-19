@@ -1,5 +1,5 @@
 use core::panic;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug)]
 struct NFA {
@@ -132,7 +132,15 @@ fn normalize_regex(regex: &str) -> String {
     normalized
 }
 
-// TODO: Implement Glushkov Construction as well to benchmark them
+// GLUSHKOV CONSTRUCTION
+fn glushkov_construction(regex: &str) -> NFA {
+    todo!()
+}
+
+fn nfa_no_epsilon_to_dfa() {
+    todo!()
+}
+// END GLUSHKOV CONSTRUCTION
 
 // THOMPSON CONSTRUCTION ---
 fn thompson_construction(normalized_regex: &str) -> NFA {
@@ -142,6 +150,11 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
                 let nfa_right = nfa_stack.pop().expect("Expected NFA for union");
                 let nfa_left = nfa_stack.pop().expect("Expected NFA for union");
                 nfa_stack.push(union(&nfa_left, &nfa_right));
+            }
+            '.' => {
+                let nfa_right = nfa_stack.pop().expect("Expected NFA for concatenation");
+                let nfa_left = nfa_stack.pop().expect("Expected NFA for concatenation");
+                nfa_stack.push(concatenate(&nfa_left, &nfa_right));
             }
             _ => panic!("Unknown operator {:?}", operator),
         }
@@ -153,31 +166,38 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
 
     for symbol in normalized_regex.chars() {
         match symbol {
-            '(' => operators.push('('),
+            '(' => {
+                operators.push('(');
+                concat_flag = false;
+            }
             ')' => {
+                let mut is_epsilon = true;
                 while let Some(op) = operators.pop() {
-                    if op == '(' {
+                    if op == '(' && is_epsilon {
+                        nfa_stack.push(create_basic_epsilon_nfa());
+                        break;
+                    } else if op == '(' {
                         break;
                     }
+                    is_epsilon = false;
                     apply_operator(&mut nfa_stack, op);
                 }
+                concat_flag = true;
             }
             '*' => {
                 let last_nfa = nfa_stack.pop().expect("Expected NFA for Kleene Star");
                 nfa_stack.push(apply_kleene_star(&last_nfa));
+                concat_flag = true;
             }
             '|' => {
                 operators.push('|');
                 concat_flag = false;
             }
             _ => {
-                let new_nfa = create_basic_nfa(&symbol);
                 if concat_flag {
-                    let previous_nfa = nfa_stack.pop().expect("Expected previous NFA to concat");
-                    nfa_stack.push(concatenate(&previous_nfa, &new_nfa));
-                } else {
-                    nfa_stack.push(new_nfa);
+                    operators.push('.');
                 }
+                nfa_stack.push(create_basic_nfa(&symbol));
                 concat_flag = true;
             }
         }
@@ -297,6 +317,13 @@ fn create_basic_nfa(letter: &char) -> NFA {
         accepting_state: 1,
     }
 }
+
+fn create_basic_epsilon_nfa() -> NFA {
+    NFA {
+        transitions: HashMap::from([((0, None), vec![1])]),
+        accepting_state: 1,
+    }
+}
 // END THOMPSON CONSTRUCTION ---
 
 // NFA to DFA functions ---
@@ -390,27 +417,48 @@ fn nfa_to_dfa(nfa: &NFA) -> DFA {
 // END NFA to DFA functions ---
 
 fn optimise_dfa(dfa: &DFA) -> DFA {
-    let mut partition: Vec<HashSet<u32>> = vec![dfa.accepting_states.clone()];
+    let mut partition: HashMap<u32, usize> = HashMap::new();
+    let mut accepting_states_set: HashSet<u32> = dfa.accepting_states.clone();
     let mut non_accepting_states: HashSet<u32> = HashSet::new();
+    let mut all_states: HashSet<u32> = HashSet::new();
 
     for (&(state, _), _) in &dfa.transitions {
-        if !dfa.accepting_states.contains(&state) {
+        all_states.insert(state);
+        if dfa.accepting_states.contains(&state) {
+            accepting_states_set.insert(state);
+        } else {
             non_accepting_states.insert(state);
         }
     }
 
-    if !non_accepting_states.is_empty() {
-        partition.push(non_accepting_states);
+    for state in dfa.accepting_states.iter() {
+        all_states.insert(*state);
     }
 
-    let mut worklist: Vec<HashSet<u32>> = partition.clone();
-    let mut new_partition: Vec<HashSet<u32>> = partition.clone();
+    for state in all_states.iter() {
+        if dfa.accepting_states.contains(state) {
+            partition.insert(*state, 0);
+        } else {
+            partition.insert(*state, 1);
+        }
+    }
 
-    while let Some(current_partition) = worklist.pop() {
-        let mut states_to_check = HashMap::new();
+    let mut partition_list: Vec<HashSet<u32>> = Vec::new();
+    partition_list.push(accepting_states_set);
+    partition_list.push(non_accepting_states);
 
+    let mut worklist: VecDeque<usize> = VecDeque::new();
+    if partition_list[0].len() > 0 {
+        worklist.push_back(0);
+    }
+    if partition_list.len() > 1 && partition_list[1].len() > 0 {
+        worklist.push_back(1);
+    }
+
+    while let Some(current_partition_index) = worklist.pop_front() {
+        let mut states_to_check: HashMap<Option<char>, HashSet<u32>> = HashMap::new();
         for (&(source_state, symbol), &target_state) in &dfa.transitions {
-            if current_partition.contains(&target_state) {
+            if partition[&target_state] == current_partition_index {
                 states_to_check
                     .entry(symbol)
                     .or_insert_with(HashSet::new)
@@ -418,62 +466,87 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
             }
         }
 
-        for &symbol in states_to_check.keys() {
-            let states_to_split = &states_to_check[&symbol];
+        for (_, states_to_split) in states_to_check.iter() {
+            let mut partitions_to_split: HashSet<usize> = HashSet::new();
 
-            let mut involved_partitions = Vec::new();
-
-            for part in &new_partition {
-                let intersection: HashSet<u32> =
-                    part.intersection(states_to_split).cloned().collect();
-
-                if !intersection.is_empty() && intersection.len() != part.len() {
-                    involved_partitions.push(part.clone());
+            for &state in states_to_split.iter() {
+                let partition_index = partition[&state];
+                if partition_list[partition_index].len() > 1 {
+                    partitions_to_split.insert(partition_index);
                 }
             }
 
-            for part in involved_partitions {
-                let intersection: HashSet<u32> =
-                    part.intersection(states_to_split).cloned().collect();
-                let difference: HashSet<u32> = part.difference(states_to_split).cloned().collect();
+            for &partition_index_to_split in partitions_to_split.iter() {
+                let mut intersection: HashSet<u32> = HashSet::new();
+                let mut difference: HashSet<u32> = HashSet::new();
 
-                new_partition.retain(|p| p != &part);
-                new_partition.push(intersection.clone());
-                new_partition.push(difference.clone());
+                for &state in partition_list[partition_index_to_split].iter() {
+                    if states_to_split.contains(&state) {
+                        intersection.insert(state);
+                    } else {
+                        difference.insert(state);
+                    }
+                }
 
-                if worklist.contains(&part) {
-                    worklist.retain(|p| p != &part);
-                    worklist.push(intersection);
-                    worklist.push(difference);
-                } else if intersection.len() < difference.len() {
-                    worklist.push(intersection);
-                } else {
-                    worklist.push(difference);
+                if !intersection.is_empty() && !difference.is_empty() {
+                    let new_partition_index = partition_list.len();
+
+                    for &state in intersection.iter() {
+                        partition.insert(state, new_partition_index);
+                    }
+
+                    partition_list.push(intersection);
+
+                    for &state in &difference {
+                        partition.insert(state, partition_index_to_split);
+                    }
+                    partition_list[partition_index_to_split] = difference;
+
+                    if partition_list[new_partition_index].len()
+                        < partition_list[partition_index_to_split].len()
+                    {
+                        worklist.push_back(new_partition_index);
+                    } else {
+                        worklist.push_back(partition_index_to_split);
+                    }
                 }
             }
         }
     }
 
-    // Construct new minimized DFA
-    let mut minimal_transitions = HashMap::new();
-    let mut minimal_accepting_states = HashSet::new();
-    let state_mapping: HashMap<u32, u32> = new_partition
-        .iter()
-        .enumerate()
-        .map(|(i, part)| part.iter().map(move |&state| (state, i as u32)))
-        .flatten()
-        .collect();
+    let mut minimal_transitions: HashMap<(u32, Option<char>), u32> = HashMap::new();
+    let mut minimal_accepting_states: HashSet<u32> = HashSet::new();
+    let mut new_state_map: HashMap<usize, u32> = HashMap::new();
+
+    let mut next_state_id: u32 = 0;
+
+    if let Some(partition_index) = partition.get(&0) {
+        new_state_map.insert(*partition_index, next_state_id);
+        next_state_id += 1;
+    }
+
+    for (_, &partition_index) in partition.iter() {
+        if !new_state_map.contains_key(&partition_index) {
+            new_state_map.insert(partition_index, next_state_id);
+            next_state_id += 1;
+        }
+    }
+
+    for (original_state, &partition_index) in partition.iter() {
+        let new_state_id = new_state_map[&partition_index];
+        if dfa.accepting_states.contains(original_state) {
+            minimal_accepting_states.insert(new_state_id);
+        }
+    }
 
     for (&(source_state, symbol), &target_state) in &dfa.transitions {
-        if let Some(&new_target_state) = state_mapping.get(&target_state) {
-            minimal_transitions.insert((state_mapping[&source_state], symbol), new_target_state);
-        }
-    }
+        let source_partition = partition[&source_state];
+        let target_partition = partition[&target_state];
 
-    for &accepting_state in &dfa.accepting_states {
-        if let Some(&new_accept_state) = state_mapping.get(&accepting_state) {
-            minimal_accepting_states.insert(new_accept_state);
-        }
+        let new_source_state = new_state_map[&source_partition];
+        let new_target_state = new_state_map[&target_partition];
+
+        minimal_transitions.insert((new_source_state, symbol), new_target_state);
     }
 
     DFA {
@@ -504,6 +577,52 @@ impl DFA {
             }
         }
         self.accepting_states.contains(&current_state)
+    }
+
+    pub fn find_first_match<'a>(&self, text: &'a str) -> Option<&'a str> {
+        for start_pos in 0..text.len() {
+            let mut current_state = 0;
+            let mut match_start = None;
+
+            for (i, c) in text.chars().enumerate().skip(start_pos) {
+                if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
+                    current_state = next_state;
+                    match_start = match_start.or(Some(i));
+
+                    if self.accepting_states.contains(&current_state) {
+                        return Some(&text[match_start.unwrap()..=i]);
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn find_all_matches<'a>(&self, input: &'a str) -> Vec<&'a str> {
+        let mut matches: Vec<&str> = Vec::new();
+
+        for start_pos in 0..input.len() {
+            let mut current_state = 0;
+            let mut match_start: Option<usize> = None;
+
+            for (i, c) in input.chars().enumerate().skip(start_pos) {
+                if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
+                    current_state = next_state;
+                    match_start = match_start.or(Some(start_pos + i));
+
+                    if self.accepting_states.contains(&current_state) {
+                        matches.push(&input[start_pos..=i]);
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+        matches
     }
 }
 
@@ -606,6 +725,16 @@ mod tests {
 
         assert_eq!(expected_transitions, generated_dfa.transitions);
         assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
+
+        let generated_dfa_2 = DFA::new("a|()");
+        let expected_transitions_2 = HashMap::from([((0, Some('a')), 1)]);
+        let expected_accepting_states_2 = HashSet::from([0, 1]);
+
+        assert_eq!(expected_transitions_2, generated_dfa_2.transitions);
+        assert_eq!(
+            expected_accepting_states_2,
+            generated_dfa_2.accepting_states
+        );
     }
 
     #[test]

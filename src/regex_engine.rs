@@ -15,14 +15,12 @@ impl Regex {
         self.dfa.process(text)
     }
 
-    pub fn find(&self, text: &str) -> Option<&str> {
-        // TODO: Find first match in the text
-        todo!()
+    pub fn find<'a>(&self, text: &'a str) -> Option<&'a str> {
+        self.dfa.find_first_match(text)
     }
 
-    pub fn findall(&self, text: &str) -> Vec<&str> {
-        // TODO: Find all matches in the text
-        todo!()
+    pub fn findall<'a>(&self, text: &'a str) -> Vec<&'a str> {
+        self.dfa.find_all_matches(text)
     }
 }
 
@@ -42,6 +40,39 @@ mod tests {
         let failing_strings = vec!["abc", "x"];
         for string in failing_strings {
             assert!(!regex_object.is_match(string));
+        }
+    }
+
+    #[test]
+    fn find_test() {
+        let regex_object = Regex::new("abc");
+        let test_cases = vec![
+            ("abcd", Some("abc")),
+            ("xyzabc", Some("abc")),
+            ("abc", Some("abc")),
+            ("ac", None),
+            ("def", None),
+            ("aabc", Some("abc")),
+        ];
+
+        for (text, expected) in test_cases {
+            let result = regex_object.find(text);
+            assert_eq!(result, expected, "Failed for input: {}", text);
+        }
+    }
+
+    #[test]
+    fn find_all_test() {
+        let regex_object = Regex::new("abc*");
+        let test_cases = vec![
+            ("abcd", vec!["ab"]),
+            ("ac", vec![]),
+            ("abcab", vec!["ab", "ab"]),
+        ];
+
+        for (text, expected) in test_cases {
+            let result = regex_object.findall(text);
+            assert_eq!(result, expected, "Failed for input: {}", text);
         }
     }
 }
