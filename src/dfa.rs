@@ -1,13 +1,11 @@
 use core::panic;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-#[derive(Debug)]
 struct NFA {
     transitions: HashMap<(u32, Option<char>), Vec<u32>>,
     accepting_state: u32, // the thompson construction always has one accepting_state
 }
 
-#[derive(Debug)]
 pub struct DFA {
     transitions: HashMap<(u32, Option<char>), u32>,
     accepting_states: HashSet<u32>,
@@ -71,16 +69,16 @@ fn is_valid_regex(regex: &str) -> bool {
     open_paren_count == 0
 }
 
-fn normalize_regex(regex: &str) -> String {
+fn normalise_regex(regex: &str) -> String {
     // TODO: Implement further parsing features here or in a separat function
     // e.g. a+ -> aa*
-    let mut normalized = String::new();
+    let mut normalised = String::new();
     let mut escape_sequence = false;
     let mut prev_char = '\0';
 
     for curr_char in regex.chars() {
         if escape_sequence {
-            normalized.push(curr_char);
+            normalised.push(curr_char);
             escape_sequence = false;
             prev_char = curr_char;
             continue;
@@ -88,13 +86,13 @@ fn normalize_regex(regex: &str) -> String {
 
         if curr_char == '\\' {
             escape_sequence = true;
-            normalized.push(curr_char);
+            normalised.push(curr_char);
             continue;
         }
 
         if curr_char == '+' {
-            normalized.push(prev_char);
-            normalized.push('*');
+            normalised.push(prev_char);
+            normalised.push('*');
             prev_char = curr_char;
             continue;
         }
@@ -103,37 +101,42 @@ fn normalize_regex(regex: &str) -> String {
                 ')' => {
                     let mut balance = 0;
 
-                    for j in (0..normalized.len()).rev() {
-                        let ch = normalized.chars().nth(j).unwrap();
+                    for j in (0..normalised.len()).rev() {
+                        let ch = normalised.chars().nth(j).unwrap();
                         if ch == ')' {
                             balance += 1;
                         } else if ch == '(' {
                             balance -= 1;
                             if balance == 0 {
-                                normalized.insert(j, '(');
+                                normalised.insert(j, '(');
                                 break;
                             }
                         }
                     }
                 }
                 _ => {
-                    normalized.insert(normalized.len() - 1, '(');
+                    normalised.insert(normalised.len() - 1, '(');
                 }
             }
-            normalized.push_str("|())");
+            normalised.push_str("|())");
             prev_char = curr_char;
             continue;
         }
 
-        normalized.push(curr_char);
+        normalised.push(curr_char);
         prev_char = curr_char;
     }
 
-    normalized
+    normalised
 }
 
 // GLUSHKOV CONSTRUCTION
 fn glushkov_construction(regex: &str) -> NFA {
+    // TODO: Step 1 (rename letters / index them)
+    // TODO: Step 2a ()
+    // TODO: Step 2b ()
+    // TODO: Step 3 ()
+    // TODO: Step 4 ()
     todo!()
 }
 
@@ -143,7 +146,7 @@ fn nfa_no_epsilon_to_dfa() {
 // END GLUSHKOV CONSTRUCTION
 
 // THOMPSON CONSTRUCTION ---
-fn thompson_construction(normalized_regex: &str) -> NFA {
+fn thompson_construction(normalised_regex: &str) -> NFA {
     fn apply_operator(nfa_stack: &mut Vec<NFA>, operator: char) {
         match operator {
             '|' => {
@@ -164,7 +167,7 @@ fn thompson_construction(normalized_regex: &str) -> NFA {
     let mut nfa_stack: Vec<NFA> = Vec::new();
     let mut concat_flag = false;
 
-    for symbol in normalized_regex.chars() {
+    for symbol in normalised_regex.chars() {
         match symbol {
             '(' => {
                 operators.push('(');
@@ -561,8 +564,8 @@ impl DFA {
             panic!("{} is not a valid regular expression!", regex);
         }
 
-        let normalized_regex = normalize_regex(&regex);
-        let regex_nfa: NFA = thompson_construction(&normalized_regex);
+        let normalised_regex = normalise_regex(&regex);
+        let regex_nfa: NFA = thompson_construction(&normalised_regex);
         let regex_dfa = nfa_to_dfa(&regex_nfa);
         optimise_dfa(&regex_dfa)
     }
@@ -698,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_regex_test() {
+    fn normalise_regex_test() {
         let cases = [
             (r"a+", r"aa*"),
             (r"a\+", r"a\+"),
@@ -708,10 +711,10 @@ mod tests {
         ];
 
         for (input, expected) in cases {
-            let result = normalize_regex(input);
+            let result = normalise_regex(input);
             assert_eq!(
                 result, expected,
-                "Normalization failed for input '{}'",
+                "Normalisation failed for input '{}'",
                 input
             );
         }
