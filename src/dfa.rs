@@ -166,8 +166,17 @@ fn thompson_construction(normalised_regex: &str) -> NFA {
     let mut operators: Vec<char> = Vec::new();
     let mut nfa_stack: Vec<NFA> = Vec::new();
     let mut concat_flag = false;
+    let mut escape_sequence = false;
 
     for symbol in normalised_regex.chars() {
+        if escape_sequence {
+            if concat_flag {
+                operators.push('.');
+            }
+            nfa_stack.push(create_basic_nfa(&symbol));
+            concat_flag = true;
+            continue;
+        }
         match symbol {
             '(' => {
                 operators.push('(');
@@ -195,6 +204,9 @@ fn thompson_construction(normalised_regex: &str) -> NFA {
             '|' => {
                 operators.push('|');
                 concat_flag = false;
+            }
+            '\\' => {
+                escape_sequence = true;
             }
             _ => {
                 if concat_flag {
@@ -607,24 +619,39 @@ impl DFA {
     pub fn find_all_matches<'a>(&self, input: &'a str) -> Vec<&'a str> {
         let mut matches: Vec<&str> = Vec::new();
 
-        for start_pos in 0..input.len() {
+        let mut start_pos = 0;
+        while start_pos < input.len() {
             let mut current_state = 0;
             let mut match_start: Option<usize> = None;
+            let mut match_end: Option<usize> = None;
+            let mut found_match = false;
 
             for (i, c) in input.chars().enumerate().skip(start_pos) {
                 if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
                     current_state = next_state;
-                    match_start = match_start.or(Some(start_pos + i));
+                    match_start = match_start.or(Some(start_pos));
 
                     if self.accepting_states.contains(&current_state) {
-                        matches.push(&input[start_pos..=i]);
+                        match_end = Some(i);
+                        found_match = true;
+                    }
+
+                    if i == input.len() - 1 && found_match {
                         break;
                     }
                 } else {
                     break;
                 }
             }
+
+            if let (Some(start), Some(end)) = (match_start, match_end) {
+                matches.push(&input[start..=end]);
+                start_pos = end;
+            } else {
+                start_pos += 1;
+            }
         }
+
         matches
     }
 }

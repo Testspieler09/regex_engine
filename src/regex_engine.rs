@@ -65,9 +65,9 @@ mod tests {
     fn find_all_test() {
         let regex_object = Regex::new("abc*");
         let test_cases = vec![
-            ("abcd", vec!["ab"]),
+            ("abcd", vec!["abc"]),
             ("ac", vec![]),
-            ("abcab", vec!["ab", "ab"]),
+            ("abcab", vec!["abc", "ab"]),
         ];
 
         for (text, expected) in test_cases {
