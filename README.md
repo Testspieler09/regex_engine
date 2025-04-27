@@ -12,6 +12,19 @@ This is a very simple regex engine implemented in Rust. It is designed to parse 
 - Supports basic regex syntax including character classes, quantifiers (`*`, `+`), and the `.` wildcard.
 - Converts regex patterns to finite automata for efficient matching.
 
+> [!NOTE]
+> The following characters are supported:
+>
+> `|`: Or / Union
+>
+> `(` and `)`: Group
+>
+> `*`: Kleene star (0 to $$\infty$$)
+>
+> `+`: Match previous group 1 to $$\infty$$ times
+>
+> `.`: Dot wildcard that can match any character.
+
 ## Usage
 
 Here is a basic example of how to use the regex engine in your Rust code:
@@ -46,7 +59,7 @@ fn main() {
   - Finds the first match in the text.
 
 - `fn findall(&self, text: &str) -> Vec<&str>`
-  - Finds the first match in the text.
+  - Finds all non overlapping matches in the specified text.
 
 ## Contributing
 

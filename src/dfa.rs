@@ -70,14 +70,13 @@ fn is_valid_regex(regex: &str) -> bool {
 }
 
 fn normalise_regex(regex: &str) -> String {
-    // TODO: Implement further parsing features here or in a separat function
-    // e.g. a+ -> aa*
     let mut normalised = String::new();
     let mut escape_sequence = false;
     let mut prev_char = '\0';
 
     for curr_char in regex.chars() {
         if escape_sequence {
+            // TODO: Implement further parsing features here (e.g. \w \d)
             normalised.push(curr_char);
             escape_sequence = false;
             prev_char = curr_char;
@@ -119,6 +118,11 @@ fn normalise_regex(regex: &str) -> String {
                 }
             }
             normalised.push_str("|())");
+            prev_char = curr_char;
+            continue;
+        }
+        if curr_char == '.' {
+            normalised.push_str("(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z|0|1|2|3|4|5|6|7|8|9| |!|\"|#|$|%|&|'|\\(|\\)|\\*|\\+|,|-|.|/|:|;|<|=|>|?|@|[|\\\\|]|^|_|`|{|}|~)");
             prev_char = curr_char;
             continue;
         }
@@ -175,10 +179,14 @@ fn thompson_construction(normalised_regex: &str) -> NFA {
             }
             nfa_stack.push(create_basic_nfa(&symbol));
             concat_flag = true;
+            escape_sequence = false;
             continue;
         }
         match symbol {
             '(' => {
+                if concat_flag {
+                    operators.push('.');
+                }
                 operators.push('(');
                 concat_flag = false;
             }
@@ -595,9 +603,12 @@ impl DFA {
     }
 
     pub fn find_first_match<'a>(&self, text: &'a str) -> Option<&'a str> {
-        for start_pos in 0..text.len() {
+        let mut start_pos = 0;
+        while start_pos < text.len() {
             let mut current_state = 0;
             let mut match_start = None;
+            let mut match_end = None;
+            let mut found_match = false;
 
             for (i, c) in text.chars().enumerate().skip(start_pos) {
                 if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
@@ -605,11 +616,22 @@ impl DFA {
                     match_start = match_start.or(Some(i));
 
                     if self.accepting_states.contains(&current_state) {
-                        return Some(&text[match_start.unwrap()..=i]);
+                        found_match = true;
+                        match_end = Some(i)
+                    }
+
+                    if i == text.len() - 1 && found_match {
+                        break;
                     }
                 } else {
                     break;
                 }
+            }
+
+            if let (Some(start), Some(end)) = (match_start, match_end) {
+                return Some(&text[start..=end]);
+            } else {
+                start_pos += 1;
             }
         }
 
@@ -735,6 +757,7 @@ mod tests {
             (r"a?", r"(a|())"),
             (r"a\?", r"a\?"),
             (r"(ab)?", r"((ab)|())"),
+            (r".", "(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z|0|1|2|3|4|5|6|7|8|9| |!|\"|#|$|%|&|'|\\(|\\)|\\*|\\+|,|-|.|/|:|;|<|=|>|?|@|[|\\\\|]|^|_|`|{|}|~)"),
         ];
 
         for (input, expected) in cases {
