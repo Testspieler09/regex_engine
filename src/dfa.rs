@@ -315,7 +315,7 @@ fn union(left: &NFA, right: &NFA) -> NFA {
 }
 
 fn concatenate(left: &NFA, right: &NFA) -> NFA {
-    let mut transitions = HashMap::from(left.transitions.clone());
+    let mut transitions: HashMap<(u32, Option<char>), Vec<u32>> = left.transitions.clone();
 
     // HACK: The accepting states are (based on the implementation) the last ones of the NFA
     // thus it is possible to get the num of states in the first NFA like this
@@ -350,22 +350,19 @@ fn create_basic_epsilon_nfa() -> NFA {
 // END THOMPSON CONSTRUCTION ---
 
 // NFA to DFA functions ---
-fn epsilon_closure(nfa: &NFA, states: &HashSet<u32>) -> HashSet<u32> {
-    let mut closure = states.clone();
+fn epsilon_closure(nfa: &NFA, states: &mut HashSet<u32>) {
     let mut stack = states.clone();
 
     while let Some(&state_id) = stack.iter().next() {
         stack.remove(&state_id);
         if let Some(epsilon_states) = nfa.transitions.get(&(state_id, None)) {
             for &next_state in epsilon_states {
-                if closure.insert(next_state) {
+                if states.insert(next_state) {
                     stack.insert(next_state);
                 }
             }
         }
     }
-
-    closure
 }
 
 fn move_nfa(nfa: &NFA, states: &HashSet<u32>, symbol: char) -> HashSet<u32> {
@@ -388,21 +385,21 @@ fn hash_set_to_sorted_vec(set: &HashSet<u32>) -> Vec<u32> {
 
 fn nfa_to_dfa(nfa: &NFA) -> DFA {
     // Start from the initial state of the NFA, assuming it's state 0
-    let start_closure = epsilon_closure(nfa, &HashSet::from([0]));
+    let mut start_closure = HashSet::from([0]);
+    epsilon_closure(nfa, &mut start_closure);
     let mut state_map = HashMap::new();
-    let mut dfa_states = vec![start_closure.clone()];
     let mut dfa_accepting_states = HashSet::new();
     let mut transitions = HashMap::new();
-    let mut unmarked_states = vec![start_closure];
 
     // Map the initial DFA state from the initial NFA state closure
-    state_map.insert(hash_set_to_sorted_vec(&dfa_states[0]), 0);
+    state_map.insert(hash_set_to_sorted_vec(&start_closure), 0);
+
+    let mut unmarked_states = vec![start_closure];
 
     while let Some(current_closure) = unmarked_states.pop() {
         let current_dfa_state_id = state_map[&hash_set_to_sorted_vec(&current_closure)];
 
-        let is_accepting = current_closure.contains(&nfa.accepting_state);
-        if is_accepting {
+        if current_closure.contains(&nfa.accepting_state) {
             dfa_accepting_states.insert(current_dfa_state_id);
         }
 
@@ -414,21 +411,23 @@ fn nfa_to_dfa(nfa: &NFA) -> DFA {
             .collect();
 
         for symbol in symbols {
-            let move_closure = epsilon_closure(nfa, &move_nfa(nfa, &current_closure, symbol));
-            let sorted_vec = hash_set_to_sorted_vec(&move_closure);
+            let mut move_closure = move_nfa(nfa, &current_closure, symbol);
+            epsilon_closure(nfa, &mut move_closure);
 
-            if !move_closure.is_empty() {
-                let next_dfa_state_id = state_map.len() as u32;
-
-                // Insert new DFA state if isn't already mapped
-                if !state_map.contains_key(&sorted_vec) {
-                    state_map.insert(sorted_vec.clone(), next_dfa_state_id);
-                    dfa_states.push(move_closure.clone());
-                    unmarked_states.push(move_closure);
-                }
-
-                transitions.insert((current_dfa_state_id, Some(symbol)), state_map[&sorted_vec]);
+            if move_closure.is_empty() {
+                continue;
             }
+
+            let sorted_vec = hash_set_to_sorted_vec(&move_closure);
+            let next_dfa_state_id = state_map.len() as u32;
+
+            // Insert new DFA state if isn't already mapped
+            if !state_map.contains_key(&sorted_vec) {
+                state_map.insert(sorted_vec.clone(), next_dfa_state_id);
+                unmarked_states.push(move_closure);
+            }
+
+            transitions.insert((current_dfa_state_id, Some(symbol)), state_map[&sorted_vec]);
         }
     }
 
