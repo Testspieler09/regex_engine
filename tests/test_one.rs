@@ -1,4 +1,4 @@
-use regex_engine::regex_engine::Regex;
+use regex_engine::regex_engine::{ConstructionType, Regex};
 
 #[test]
 fn test_escape_sequence_plus() {
@@ -6,7 +6,7 @@ fn test_escape_sequence_plus() {
     let text = "aaab+b"; // should fail on match
     let text_success = "aaab+";
 
-    let engine = Regex::new(pattern);
+    let engine = Regex::new(pattern, ConstructionType::Thompson);
 
     let expected_match = text_success;
 
@@ -22,7 +22,7 @@ fn test_escape_sequence_slash() {
     let text = "aaab\\b"; // should fail on match
     let text_success = "aaab\\";
 
-    let engine = Regex::new(pattern);
+    let engine = Regex::new(pattern, ConstructionType::Thompson);
 
     let expected_match = text_success;
 
@@ -38,7 +38,7 @@ fn test_dot_wildcard() {
     let text = "cabbc"; // should fail on match
     let text_success = "abbc";
 
-    let engine = Regex::new(pattern);
+    let engine = Regex::new(pattern, ConstructionType::Thompson);
 
     let expected_match = text_success;
 
