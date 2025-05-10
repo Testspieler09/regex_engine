@@ -7,7 +7,7 @@ struct NFA {
 }
 
 pub struct DFA {
-    transitions: HashMap<(u32, Option<char>), u32>,
+    transitions: HashMap<(u32, char), u32>,
     accepting_states: HashSet<u32>,
 }
 
@@ -289,7 +289,7 @@ fn nfa_to_dfa(nfa: &NFA) -> DFA {
                 unmarked_states.push(move_closure);
             }
 
-            transitions.insert((current_dfa_state_id, Some(symbol)), state_map[&sorted_vec]);
+            transitions.insert((current_dfa_state_id, symbol), state_map[&sorted_vec]);
         }
     }
 
@@ -340,7 +340,7 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
     }
 
     while let Some(current_partition_index) = worklist.pop_front() {
-        let mut states_to_check: HashMap<Option<char>, HashSet<u32>> = HashMap::new();
+        let mut states_to_check: HashMap<char, HashSet<u32>> = HashMap::new();
         for (&(source_state, symbol), &target_state) in &dfa.transitions {
             if partition[&target_state] == current_partition_index {
                 states_to_check
@@ -398,7 +398,7 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
         }
     }
 
-    let mut minimal_transitions: HashMap<(u32, Option<char>), u32> = HashMap::new();
+    let mut minimal_transitions: HashMap<(u32, char), u32> = HashMap::new();
     let mut minimal_accepting_states: HashSet<u32> = HashSet::new();
     let mut new_state_map: HashMap<usize, u32> = HashMap::new();
 
@@ -454,7 +454,7 @@ impl DFA {
     pub fn process(&self, input: &str) -> bool {
         let mut current_state = 0;
         for c in input.chars() {
-            if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
+            if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
                 current_state = next_state;
             } else {
                 return false;
@@ -472,7 +472,7 @@ impl DFA {
             let mut found_match = false;
 
             for (i, c) in text.chars().enumerate().skip(start_pos) {
-                if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
+                if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
                     current_state = next_state;
                     match_start = match_start.or(Some(i));
 
@@ -510,7 +510,7 @@ impl DFA {
             let mut found_match = false;
 
             for (i, c) in input.chars().enumerate().skip(start_pos) {
-                if let Some(&next_state) = self.transitions.get(&(current_state, Some(c))) {
+                if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
                     current_state = next_state;
                     match_start = match_start.or(Some(start_pos));
 
@@ -546,14 +546,14 @@ mod tests {
     #[test]
     fn create_dfa_test() {
         let generated_dfa = DFA::new("(a|b)*");
-        let expected_transitions = HashMap::from([((0, Some('a')), 0), ((0, Some('b')), 0)]);
+        let expected_transitions = HashMap::from([((0, 'a'), 0), ((0, 'b'), 0)]);
         let expected_accepting_states = HashSet::from([0]);
 
         assert_eq!(expected_transitions, generated_dfa.transitions);
         assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
 
         let generated_dfa_2 = DFA::new("a|()");
-        let expected_transitions_2 = HashMap::from([((0, Some('a')), 1)]);
+        let expected_transitions_2 = HashMap::from([((0, 'a'), 1)]);
         let expected_accepting_states_2 = HashSet::from([0, 1]);
 
         assert_eq!(expected_transitions_2, generated_dfa_2.transitions);
@@ -671,20 +671,20 @@ mod tests {
 
         let expected_options = vec![
             HashMap::from([
-                ((0, Some('a')), 1),
-                ((0, Some('b')), 2),
-                ((1, Some('a')), 1),
-                ((1, Some('b')), 2),
-                ((2, Some('a')), 1),
-                ((2, Some('b')), 2),
+                ((0, 'a'), 1),
+                ((0, 'b'), 2),
+                ((1, 'a'), 1),
+                ((1, 'b'), 2),
+                ((2, 'a'), 1),
+                ((2, 'b'), 2),
             ]),
             HashMap::from([
-                ((0, Some('a')), 2),
-                ((0, Some('b')), 1),
-                ((1, Some('a')), 2),
-                ((1, Some('b')), 1),
-                ((2, Some('a')), 2),
-                ((2, Some('b')), 1),
+                ((0, 'a'), 2),
+                ((0, 'b'), 1),
+                ((1, 'a'), 2),
+                ((1, 'b'), 1),
+                ((2, 'a'), 2),
+                ((2, 'b'), 1),
             ]),
         ];
         let expected_accepting_states = HashSet::from([0, 1, 2]);
