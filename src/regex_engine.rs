@@ -1,47 +1,46 @@
-use crate::glushkov::DFA as GlushkovDFA;
-use crate::thompson::DFA as ThompsonDFA;
+use crate::{Dfa, glushkov::GlushkovDfa, thompson::ThompsonDfa};
 
 pub enum ConstructionType {
     Thompson,
     Glushkov,
 }
 
-enum DFAType {
-    Thompson(ThompsonDFA),
-    Glushkov(GlushkovDFA),
+enum DfaType {
+    Thompson(ThompsonDfa),
+    Glushkov(GlushkovDfa),
 }
 
 pub struct Regex {
-    dfa: DFAType,
+    dfa: DfaType,
 }
 
 impl Regex {
     pub fn new(pattern: &str, construction: ConstructionType) -> Self {
         let dfa_type = match construction {
-            ConstructionType::Thompson => DFAType::Thompson(ThompsonDFA::new(pattern)),
-            ConstructionType::Glushkov => DFAType::Glushkov(GlushkovDFA::new(pattern)),
+            ConstructionType::Thompson => DfaType::Thompson(ThompsonDfa::new(pattern)),
+            ConstructionType::Glushkov => DfaType::Glushkov(GlushkovDfa::new(pattern)),
         };
         Regex { dfa: dfa_type }
     }
 
     pub fn is_match(&self, text: &str) -> bool {
         match &self.dfa {
-            DFAType::Thompson(dfa) => dfa.process(text),
-            DFAType::Glushkov(dfa) => dfa.process(text),
+            DfaType::Thompson(dfa) => dfa.process(text),
+            DfaType::Glushkov(dfa) => dfa.process(text),
         }
     }
 
     pub fn find<'a>(&self, text: &'a str) -> Option<&'a str> {
         match &self.dfa {
-            DFAType::Thompson(dfa) => dfa.find_first_match(text),
-            DFAType::Glushkov(dfa) => dfa.find_first_match(text),
+            DfaType::Thompson(dfa) => dfa.find_first_match(text),
+            DfaType::Glushkov(dfa) => dfa.find_first_match(text),
         }
     }
 
     pub fn findall<'a>(&self, text: &'a str) -> Vec<&'a str> {
         match &self.dfa {
-            DFAType::Thompson(dfa) => dfa.find_all_matches(text),
-            DFAType::Glushkov(dfa) => dfa.find_all_matches(text),
+            DfaType::Thompson(dfa) => dfa.find_all_matches(text),
+            DfaType::Glushkov(dfa) => dfa.find_all_matches(text),
         }
     }
 }
@@ -248,16 +247,15 @@ mod tests {
             (r"a?", r"(a|())"),
             (r"a\?", r"a\?"),
             (r"(ab)?", r"((ab)|())"),
-            (r".", "(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z|0|1|2|3|4|5|6|7|8|9| |!|\"|#|$|%|&|'|\\(|\\)|\\*|\\+|,|-|.|/|:|;|<|=|>|?|@|[|\\\\|]|^|_|`|{|}|~)"),
+            (
+                r".",
+                "(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|A|B|C|D|E|F|G|H|I|J|K|L|M|N|O|P|Q|R|S|T|U|V|W|X|Y|Z|0|1|2|3|4|5|6|7|8|9| |!|\"|#|$|%|&|'|\\(|\\)|\\*|\\+|,|-|.|/|:|;|<|=|>|?|@|[|\\\\|]|^|_|`|{|}|~)",
+            ),
         ];
 
         for (input, expected) in cases {
             let result = normalise_regex(input);
-            assert_eq!(
-                result, expected,
-                "Normalisation failed for input '{}'",
-                input
-            );
+            assert_eq!(result, expected, "Normalisation failed for input '{input}'");
         }
     }
 
@@ -290,7 +288,7 @@ mod tests {
 
         for (text, expected) in test_cases {
             let result = regex_object.find(text);
-            assert_eq!(result, expected, "Failed for input: {}", text);
+            assert_eq!(result, expected, "Failed for input: {text}");
         }
     }
 
@@ -305,7 +303,7 @@ mod tests {
 
         for (text, expected) in test_cases {
             let result = regex_object.findall(text);
-            assert_eq!(result, expected, "Failed for input: {}", text);
+            assert_eq!(result, expected, "Failed for input: {text}");
         }
     }
 }

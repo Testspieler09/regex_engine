@@ -1,19 +1,43 @@
-use crate::regex_engine::{is_valid_regex, normalise_regex};
+use crate::{
+    Dfa,
+    regex_engine::{is_valid_regex, normalise_regex},
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-struct NFA {
+struct Nfa {
     transitions: HashMap<(u32, Option<char>), Vec<u32>>,
     accepting_state: u32, // the thompson construction always has one accepting_state
 }
 
-pub struct DFA {
+pub struct ThompsonDfa {
     transitions: HashMap<(u32, char), u32>,
     accepting_states: HashSet<u32>,
 }
 
+impl Dfa for ThompsonDfa {
+    fn new(regex: &str) -> Self {
+        if !is_valid_regex(regex) {
+            panic!("{regex} is not a valid regular expression!");
+        }
+
+        let normalised_regex = normalise_regex(regex);
+        let regex_nfa: Nfa = thompson_construction(&normalised_regex);
+        let regex_dfa = nfa_to_dfa(&regex_nfa);
+        optimise_dfa(&regex_dfa)
+    }
+
+    fn get_transitions(&self) -> &HashMap<(u32, char), u32> {
+        &self.transitions
+    }
+
+    fn get_accepting_states(&self) -> &HashSet<u32> {
+        &self.accepting_states
+    }
+}
+
 // THOMPSON CONSTRUCTION ---
-fn thompson_construction(normalised_regex: &str) -> NFA {
-    fn apply_operator(nfa_stack: &mut Vec<NFA>, operator: char) {
+fn thompson_construction(normalised_regex: &str) -> Nfa {
+    fn apply_operator(nfa_stack: &mut Vec<Nfa>, operator: char) {
         match operator {
             '|' => {
                 let nfa_right = nfa_stack.pop().expect("Expected NFA for union");
@@ -25,12 +49,12 @@ fn thompson_construction(normalised_regex: &str) -> NFA {
                 let nfa_left = nfa_stack.pop().expect("Expected NFA for concatenation");
                 nfa_stack.push(concatenate(&nfa_left, &nfa_right));
             }
-            _ => panic!("Unknown operator {:?}", operator),
+            _ => panic!("Unknown operator {operator:?}"),
         }
     }
 
     let mut operators: Vec<char> = Vec::new();
-    let mut nfa_stack: Vec<NFA> = Vec::new();
+    let mut nfa_stack: Vec<Nfa> = Vec::new();
     let mut concat_flag = false;
     let mut escape_sequence = false;
 
@@ -99,7 +123,7 @@ fn thompson_construction(normalised_regex: &str) -> NFA {
     nfa_stack.pop().unwrap()
 }
 
-fn apply_kleene_star(last_nfa: &NFA) -> NFA {
+fn apply_kleene_star(last_nfa: &Nfa) -> Nfa {
     let mut transitions = HashMap::new();
 
     let new_accepting = last_nfa.accepting_state + 2;
@@ -130,13 +154,13 @@ fn apply_kleene_star(last_nfa: &NFA) -> NFA {
         .or_insert_with(Vec::new)
         .push(new_accepting);
 
-    NFA {
+    Nfa {
         transitions,
         accepting_state: new_accepting,
     }
 }
 
-fn union(left: &NFA, right: &NFA) -> NFA {
+fn union(left: &Nfa, right: &Nfa) -> Nfa {
     let mut transitions = HashMap::new();
 
     let num_states_left_nfa = left.accepting_state;
@@ -162,21 +186,21 @@ fn union(left: &NFA, right: &NFA) -> NFA {
 
     transitions.insert((0, None), vec![1, num_states_left_nfa + 2]);
     transitions
-        .entry((&left.accepting_state + 1, None))
+        .entry((left.accepting_state + 1, None))
         .or_insert_with(Vec::new)
         .push(new_accepting_state);
     transitions
-        .entry((&right.accepting_state + num_states_left_nfa + 2, None))
+        .entry((right.accepting_state + num_states_left_nfa + 2, None))
         .or_insert_with(Vec::new)
         .push(new_accepting_state);
 
-    NFA {
+    Nfa {
         transitions,
         accepting_state: new_accepting_state,
     }
 }
 
-fn concatenate(left: &NFA, right: &NFA) -> NFA {
+fn concatenate(left: &Nfa, right: &Nfa) -> Nfa {
     let mut transitions: HashMap<(u32, Option<char>), Vec<u32>> = left.transitions.clone();
 
     // HACK: The accepting states are (based on the implementation) the last ones of the NFA
@@ -190,21 +214,21 @@ fn concatenate(left: &NFA, right: &NFA) -> NFA {
         );
     }
 
-    NFA {
+    Nfa {
         transitions,
         accepting_state: right.accepting_state + num_states_left_nfa,
     }
 }
 
-fn create_basic_nfa(letter: &char) -> NFA {
-    NFA {
+fn create_basic_nfa(letter: &char) -> Nfa {
+    Nfa {
         transitions: HashMap::from([((0, Some(*letter)), vec![1])]),
         accepting_state: 1,
     }
 }
 
-fn create_basic_epsilon_nfa() -> NFA {
-    NFA {
+fn create_basic_epsilon_nfa() -> Nfa {
+    Nfa {
         transitions: HashMap::from([((0, None), vec![1])]),
         accepting_state: 1,
     }
@@ -212,7 +236,7 @@ fn create_basic_epsilon_nfa() -> NFA {
 // END THOMPSON CONSTRUCTION ---
 
 // NFA to DFA functions ---
-fn epsilon_closure(nfa: &NFA, states: &mut HashSet<u32>) {
+fn epsilon_closure(nfa: &Nfa, states: &mut HashSet<u32>) {
     let mut stack = states.clone();
 
     while let Some(&state_id) = stack.iter().next() {
@@ -227,7 +251,7 @@ fn epsilon_closure(nfa: &NFA, states: &mut HashSet<u32>) {
     }
 }
 
-fn move_nfa(nfa: &NFA, states: &HashSet<u32>, symbol: char) -> HashSet<u32> {
+fn move_nfa(nfa: &Nfa, states: &HashSet<u32>, symbol: char) -> HashSet<u32> {
     let mut move_states = HashSet::new();
 
     for &state in states {
@@ -245,7 +269,7 @@ fn hash_set_to_sorted_vec(set: &HashSet<u32>) -> Vec<u32> {
     vec
 }
 
-fn nfa_to_dfa(nfa: &NFA) -> DFA {
+fn nfa_to_dfa(nfa: &Nfa) -> ThompsonDfa {
     // Start from the initial state of the NFA, assuming it's state 0
     let mut start_closure = HashSet::from([0]);
     epsilon_closure(nfa, &mut start_closure);
@@ -293,20 +317,20 @@ fn nfa_to_dfa(nfa: &NFA) -> DFA {
         }
     }
 
-    DFA {
+    ThompsonDfa {
         transitions,
         accepting_states: dfa_accepting_states,
     }
 }
 // END NFA to DFA functions ---
 
-fn optimise_dfa(dfa: &DFA) -> DFA {
+fn optimise_dfa(dfa: &ThompsonDfa) -> ThompsonDfa {
     let mut partition: HashMap<u32, usize> = HashMap::new();
     let mut accepting_states_set: HashSet<u32> = dfa.accepting_states.clone();
     let mut non_accepting_states: HashSet<u32> = HashSet::new();
     let mut all_states: HashSet<u32> = HashSet::new();
 
-    for (&(state, _), _) in &dfa.transitions {
+    for &(state, _) in dfa.transitions.keys() {
         all_states.insert(state);
         if dfa.accepting_states.contains(&state) {
             accepting_states_set.insert(state);
@@ -332,10 +356,10 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
     partition_list.push(non_accepting_states);
 
     let mut worklist: VecDeque<usize> = VecDeque::new();
-    if partition_list[0].len() > 0 {
+    if !partition_list[0].is_empty() {
         worklist.push_back(0);
     }
-    if partition_list.len() > 1 && partition_list[1].len() > 0 {
+    if partition_list.len() > 1 && !partition_list[1].is_empty() {
         worklist.push_back(1);
     }
 
@@ -345,7 +369,7 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
             if partition[&target_state] == current_partition_index {
                 states_to_check
                     .entry(symbol)
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(source_state);
             }
         }
@@ -410,8 +434,8 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
     }
 
     for (_, &partition_index) in partition.iter() {
-        if !new_state_map.contains_key(&partition_index) {
-            new_state_map.insert(partition_index, next_state_id);
+        if let std::collections::hash_map::Entry::Vacant(e) = new_state_map.entry(partition_index) {
+            e.insert(next_state_id);
             next_state_id += 1;
         }
     }
@@ -433,109 +457,9 @@ fn optimise_dfa(dfa: &DFA) -> DFA {
         minimal_transitions.insert((new_source_state, symbol), new_target_state);
     }
 
-    DFA {
+    ThompsonDfa {
         transitions: minimal_transitions,
         accepting_states: minimal_accepting_states,
-    }
-}
-
-impl DFA {
-    pub fn new(regex: &str) -> Self {
-        if !is_valid_regex(regex) {
-            panic!("{} is not a valid regular expression!", regex);
-        }
-
-        let normalised_regex = normalise_regex(&regex);
-        let regex_nfa: NFA = thompson_construction(&normalised_regex);
-        let regex_dfa = nfa_to_dfa(&regex_nfa);
-        optimise_dfa(&regex_dfa)
-    }
-
-    pub fn process(&self, input: &str) -> bool {
-        let mut current_state = 0;
-        for c in input.chars() {
-            if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
-                current_state = next_state;
-            } else {
-                return false;
-            }
-        }
-        self.accepting_states.contains(&current_state)
-    }
-
-    pub fn find_first_match<'a>(&self, text: &'a str) -> Option<&'a str> {
-        let mut start_pos = 0;
-        while start_pos < text.len() {
-            let mut current_state = 0;
-            let mut match_start = None;
-            let mut match_end = None;
-            let mut found_match = false;
-
-            for (i, c) in text.chars().enumerate().skip(start_pos) {
-                if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
-                    current_state = next_state;
-                    match_start = match_start.or(Some(i));
-
-                    if self.accepting_states.contains(&current_state) {
-                        found_match = true;
-                        match_end = Some(i)
-                    }
-
-                    if i == text.len() - 1 && found_match {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            if let (Some(start), Some(end)) = (match_start, match_end) {
-                return Some(&text[start..=end]);
-            } else {
-                start_pos += 1;
-            }
-        }
-
-        None
-    }
-
-    pub fn find_all_matches<'a>(&self, input: &'a str) -> Vec<&'a str> {
-        let mut matches: Vec<&str> = Vec::new();
-
-        let mut start_pos = 0;
-        while start_pos < input.len() {
-            let mut current_state = 0;
-            let mut match_start: Option<usize> = None;
-            let mut match_end: Option<usize> = None;
-            let mut found_match = false;
-
-            for (i, c) in input.chars().enumerate().skip(start_pos) {
-                if let Some(&next_state) = self.transitions.get(&(current_state, c)) {
-                    current_state = next_state;
-                    match_start = match_start.or(Some(start_pos));
-
-                    if self.accepting_states.contains(&current_state) {
-                        match_end = Some(i);
-                        found_match = true;
-                    }
-
-                    if i == input.len() - 1 && found_match {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            if let (Some(start), Some(end)) = (match_start, match_end) {
-                matches.push(&input[start..=end]);
-                start_pos = end;
-            } else {
-                start_pos += 1;
-            }
-        }
-
-        matches
     }
 }
 
@@ -545,14 +469,14 @@ mod tests {
 
     #[test]
     fn create_dfa_test() {
-        let generated_dfa = DFA::new("(a|b)*");
+        let generated_dfa = ThompsonDfa::new("(a|b)*");
         let expected_transitions = HashMap::from([((0, 'a'), 0), ((0, 'b'), 0)]);
         let expected_accepting_states = HashSet::from([0]);
 
         assert_eq!(expected_transitions, generated_dfa.transitions);
         assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
 
-        let generated_dfa_2 = DFA::new("a|()");
+        let generated_dfa_2 = ThompsonDfa::new("a|()");
         let expected_transitions_2 = HashMap::from([((0, 'a'), 1)]);
         let expected_accepting_states_2 = HashSet::from([0, 1]);
 
@@ -565,7 +489,7 @@ mod tests {
 
     #[test]
     fn prozess_regex_test() {
-        let generated_dfa = DFA::new("(a|b)*");
+        let generated_dfa = ThompsonDfa::new("(a|b)*");
         let test_strings = vec!["abbbababaaaa", ""];
         for string in test_strings {
             assert!(generated_dfa.process(string));
@@ -654,7 +578,7 @@ mod tests {
 
     #[test]
     fn nfa_to_dfa_test() {
-        let input_nfa = NFA {
+        let input_nfa = Nfa {
             transitions: HashMap::from([
                 ((0, None), vec![1, 7]),
                 ((1, None), vec![2, 4]),
