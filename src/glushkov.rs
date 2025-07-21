@@ -1,7 +1,4 @@
-use crate::{
-    Dfa,
-    regex_engine::{is_valid_regex, normalise_regex},
-};
+use crate::{Dfa, is_valid_regex, normalise_regex};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -153,7 +150,7 @@ fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
     // while let Some(symbol) = chars.next() {
     //     if symbol_type == SymbolType::Escaped {
     //         indexed_states
-    //             .entry(idx as u32)
+    //             .entry(idx)
     //             .or_insert((symbol, symbol_type.clone(), group_index));
     //
     //         idx += 1;
@@ -161,7 +158,7 @@ fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
     //         continue;
     //     }
     //
-    //     println!("{:?}, {:?}", union_count, symbol,);
+    //     println!("{union_count:?}, {symbol:?}");
     //     match symbol {
     //         '|' => {
     //             if let Some(last_element) = union_count.last_mut() {
@@ -193,11 +190,9 @@ fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
     //                 }
     //             }
     //
-    //             indexed_states.entry(idx as u32).or_insert((
-    //                 symbol,
-    //                 symbol_type.clone(),
-    //                 group_index,
-    //             ));
+    //             indexed_states
+    //                 .entry(idx)
+    //                 .or_insert((symbol, symbol_type.clone(), group_index));
     //
     //             idx += 1;
     //         }
@@ -347,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_many_brackets() {
+    fn test_too_many_brackets() {
         let expected = HashMap::from([
             (0, ('a', SymbolType::KleeneStar, 0)),
             (1, ('b', SymbolType::Normal, 0)),

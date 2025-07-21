@@ -1,7 +1,4 @@
-use crate::{
-    Dfa,
-    regex_engine::{is_valid_regex, normalise_regex},
-};
+use crate::{Dfa, is_valid_regex, normalise_regex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 struct Nfa {
@@ -593,7 +590,7 @@ mod tests {
 
         let generated_dfa = nfa_to_dfa(&input_nfa);
 
-        let expected_options = vec![
+        let expected_options = [
             HashMap::from([
                 ((0, 'a'), 1),
                 ((0, 'b'), 2),
