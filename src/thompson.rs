@@ -12,16 +12,16 @@ pub struct ThompsonDfa {
 }
 
 impl Dfa for ThompsonDfa {
-    fn new(regex: &str) -> Self {
+    fn new(regex: &str) -> Result<Self, String> {
         if !is_valid_regex(regex) {
-            panic!("{regex} is not a valid regular expression!");
+            return Err("{regex} is not a valid regular expression!".to_string());
         }
 
         let normalised_regex = normalise_regex(regex);
         let regex_nfa: Nfa = thompson_construction(&normalised_regex);
         let mut regex_dfa = nfa_to_dfa(&regex_nfa);
         <Self as Dfa>::optimise_dfa(&mut regex_dfa);
-        regex_dfa
+        Ok(regex_dfa)
     }
 
     fn get_transitions(&self) -> &HashMap<(u32, char), u32> {
@@ -141,10 +141,10 @@ fn thompson_construction(normalised_regex: &str) -> Nfa {
     }
 
     // Handle case where regex ends with '|' (empty right operand)
-    if let Some(&'|') = operators.last() {
-        if nfa_stack.len() < 2 {
-            nfa_stack.push(create_basic_epsilon_nfa());
-        }
+    if let Some(&'|') = operators.last()
+        && nfa_stack.len() < 2
+    {
+        nfa_stack.push(create_basic_epsilon_nfa());
     }
 
     // Process remaining operators
@@ -372,14 +372,14 @@ mod tests {
 
     #[test]
     fn create_dfa_test() {
-        let generated_dfa = ThompsonDfa::new("(a|b)*");
+        let generated_dfa = ThompsonDfa::new("(a|b)*").expect("Valid dfa");
         let expected_transitions = HashMap::from([((0, 'a'), 0), ((0, 'b'), 0)]);
         let expected_accepting_states = HashSet::from([0]);
 
         assert_eq!(expected_transitions, generated_dfa.transitions);
         assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
 
-        let generated_dfa_2 = ThompsonDfa::new("a|()");
+        let generated_dfa_2 = ThompsonDfa::new("a|()").expect("Valid dfa");
         let expected_transitions_2 = HashMap::from([((0, 'a'), 1)]);
         let expected_accepting_states_2 = HashSet::from([0, 1]);
 
@@ -389,7 +389,7 @@ mod tests {
             generated_dfa_2.accepting_states
         );
 
-        let generated_dfa = ThompsonDfa::new("a*b");
+        let generated_dfa = ThompsonDfa::new("a*b").expect("Valid dfa");
         let expected_transitions = HashMap::from([((0, 'a'), 0), ((0, 'b'), 1)]);
         let expected_accepting_states = HashSet::from([1]);
 
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn prozess_regex_test() {
-        let generated_dfa = ThompsonDfa::new("(a|b)*");
+        let generated_dfa = ThompsonDfa::new("(a|b)*").expect("Valid dfa");
         let test_strings = vec!["abbbababaaaa", ""];
         for string in test_strings {
             assert!(generated_dfa.process(string));

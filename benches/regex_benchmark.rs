@@ -13,7 +13,7 @@ fn benchmark_regex_compile_time(c: &mut Criterion) {
             &case.regex,
             |b, regex| {
                 b.iter(|| {
-                    Regex::new(regex, ConstructionType::Thompson);
+                    let _ = Regex::new(regex, ConstructionType::Thompson);
                 })
             },
         );
@@ -23,7 +23,7 @@ fn benchmark_regex_compile_time(c: &mut Criterion) {
             &case.regex,
             |b, regex| {
                 b.iter(|| {
-                    Regex::new(regex, ConstructionType::Glushkov);
+                    let _ = Regex::new(regex, ConstructionType::Glushkov);
                 })
             },
         );
@@ -47,8 +47,10 @@ fn benchmark_regex_is_match(c: &mut Criterion) {
     let mut group = c.benchmark_group("Regex Is Match");
 
     for case in &cases {
-        let thompson_regex = Regex::new(case.regex, ConstructionType::Thompson);
-        let glushkov_regex = Regex::new(case.regex, ConstructionType::Glushkov);
+        let thompson_regex =
+            Regex::new(case.regex, ConstructionType::Thompson).expect("Valid regex");
+        let glushkov_regex =
+            Regex::new(case.regex, ConstructionType::Glushkov).expect("Valid regex");
         let rust_regex = rust_regex::Regex::new(&format!("^{}$", case.regex))
             .unwrap_or_else(|_| panic!("Failed to create pattern: {}", case.regex));
 
@@ -90,8 +92,10 @@ fn benchmark_regex_find_first(c: &mut Criterion) {
     let mut group = c.benchmark_group("Regex Find First");
 
     for case in &cases {
-        let thompson_regex = Regex::new(case.regex, ConstructionType::Thompson);
-        let glushkov_regex = Regex::new(case.regex, ConstructionType::Glushkov);
+        let thompson_regex =
+            Regex::new(case.regex, ConstructionType::Thompson).expect("Valid regex");
+        let glushkov_regex =
+            Regex::new(case.regex, ConstructionType::Glushkov).expect("Valid regex");
         let rust_regex = rust_regex::Regex::new(case.regex)
             .unwrap_or_else(|_| panic!("Failed to create pattern: {}", case.regex));
 
@@ -133,8 +137,10 @@ fn benchmark_regex_find_all(c: &mut Criterion) {
     let mut group = c.benchmark_group("Regex Find All");
 
     for case in &cases {
-        let thompson_regex = Regex::new(case.regex, ConstructionType::Thompson);
-        let glushkov_regex = Regex::new(case.regex, ConstructionType::Glushkov);
+        let thompson_regex =
+            Regex::new(case.regex, ConstructionType::Thompson).expect("Valid regex");
+        let glushkov_regex =
+            Regex::new(case.regex, ConstructionType::Glushkov).expect("Valid regex");
         let rust_regex = rust_regex::Regex::new(case.regex)
             .unwrap_or_else(|_| panic!("Failed to create pattern: {}", case.regex));
 

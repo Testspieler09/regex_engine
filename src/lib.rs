@@ -5,7 +5,9 @@ mod glushkov;
 mod thompson;
 
 trait Dfa {
-    fn new(regex: &str) -> Self;
+    fn new(regex: &str) -> Result<Self, String>
+    where
+        Self: std::marker::Sized;
     fn get_transitions(&self) -> &HashMap<(u32, char), u32>;
     fn get_accepting_states(&self) -> &HashSet<u32>;
     fn get_transitions_mut(&mut self) -> &mut HashMap<(u32, char), u32>;
@@ -259,12 +261,12 @@ pub struct Regex {
 }
 
 impl Regex {
-    pub fn new(pattern: &str, construction: ConstructionType) -> Self {
+    pub fn new(pattern: &str, construction: ConstructionType) -> Result<Self, String> {
         let dfa_type = match construction {
-            ConstructionType::Thompson => DfaType::Thompson(ThompsonDfa::new(pattern)),
-            ConstructionType::Glushkov => DfaType::Glushkov(GlushkovDfa::new(pattern)),
+            ConstructionType::Thompson => DfaType::Thompson(ThompsonDfa::new(pattern)?),
+            ConstructionType::Glushkov => DfaType::Glushkov(GlushkovDfa::new(pattern)?),
         };
-        Regex { dfa: dfa_type }
+        Ok(Regex { dfa: dfa_type })
     }
 
     /// Determines if the provided `text` is an exact match for the regex pattern.
@@ -560,7 +562,7 @@ mod tests {
 
     #[test]
     fn is_match_test() {
-        let regex_object = Regex::new("a(a|b)*", ConstructionType::Thompson);
+        let regex_object = Regex::new("a(a|b)*", ConstructionType::Thompson).expect("Valid regex");
 
         let success_strings = vec!["abababaaaababa", "a"];
         for string in success_strings {
@@ -575,7 +577,7 @@ mod tests {
 
     #[test]
     fn find_test() {
-        let regex_object = Regex::new("abc", ConstructionType::Thompson);
+        let regex_object = Regex::new("abc", ConstructionType::Thompson).expect("Valid regex");
         let test_cases = vec![
             ("abcd", Some("abc")),
             ("xyzabc", Some("abc")),
@@ -593,7 +595,7 @@ mod tests {
 
     #[test]
     fn find_all_test() {
-        let regex_object = Regex::new("abc*", ConstructionType::Thompson);
+        let regex_object = Regex::new("abc*", ConstructionType::Thompson).expect("Valid regex");
         let test_cases = vec![
             ("abcd", vec!["abc"]),
             ("ac", vec![]),

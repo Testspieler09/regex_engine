@@ -6,7 +6,7 @@ fn test_all_bench_cases() {
     let cases = get_bench_cases();
 
     for case in &cases {
-        let regex = Regex::new(case.regex, ConstructionType::Thompson);
+        let regex = Regex::new(case.regex, ConstructionType::Thompson).expect("Valid regex");
 
         assert_eq!(regex.is_match(&case.input), case.expected_is_match);
         assert_eq!(

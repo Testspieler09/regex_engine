@@ -21,17 +21,19 @@ pub struct GlushkovDfa {
 }
 
 impl Dfa for GlushkovDfa {
-    fn new(regex: &str) -> Self {
+    fn new(regex: &str) -> Result<Self, String> {
         if !is_valid_regex(regex) {
-            panic!("{regex} is not a valid regular expression!");
+            return Err("{regex} is not a valid regular expression!".to_string());
         }
 
         let normalised_regex = normalise_regex(regex);
         let regex_nfa = glushkov_construction(&normalised_regex);
         dbg!(&regex_nfa);
         let mut regex_dfa = nfa_no_epsilon_to_dfa(&regex_nfa);
+        // dbg!(&regex_dfa);
         <Self as Dfa>::optimise_dfa(&mut regex_dfa);
-        regex_dfa
+        // dbg!(&regex_dfa);
+        Ok(regex_dfa)
     }
 
     fn get_transitions(&self) -> &HashMap<(u32, char), u32> {
@@ -53,19 +55,70 @@ impl Dfa for GlushkovDfa {
 
 // GLUSHKOV CONSTRUCTION
 fn glushkov_construction(regex: &str) -> Nfa {
-    dbg!(&regex);
     let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
-    let mut accepting_states: HashSet<u32> = HashSet::new();
+    let accepting_states: HashSet<u32> = compute_accepting_states(regex);
 
     let states: HashMap<u32, (char, SymbolType, u32)> = index_states(regex);
-    dbg!(&states);
 
-    fill_sets(states, &mut accepting_states, &mut transitions);
+    fill_sets(states, &mut transitions);
 
     Nfa {
         transitions,
         accepting_states,
     }
+}
+
+fn compute_accepting_states(regex: &str) -> HashSet<u32> {
+    // also need handling of escape sequence?!
+    let mut accepting_states = HashSet::new();
+    let mut number_of_accepting_states_in_group = 0;
+    let mut group_is_exhausted = false;
+    let mut last_element_was_seperator = false;
+    let num_unions = regex.chars().filter(|&c| matches!(c, '|'));
+    let mut position: u32 = regex
+        .chars()
+        .filter(|&c| !matches!(c, '(' | ')' | '|' | '*'))
+        .count() as u32;
+
+    dbg!(regex);
+
+    // check if after none ) a | is present
+    for ch in regex.chars().rev() {
+        match ch {
+            ')' => {
+                if !last_element_was_seperator {
+                    group_is_exhausted = number_of_accepting_states_in_group != 0;
+                }
+                last_element_was_seperator = true;
+            }
+            '|' => {
+                group_is_exhausted = false;
+                last_element_was_seperator = true;
+            }
+            '(' => group_is_exhausted = true,
+            '*' => {
+                // Should account for ba* -> b and a are accepting
+                last_element_was_seperator = false;
+            }
+            _ => {
+                if position != 0 {
+                    position -= 1;
+                } else {
+                    break;
+                }
+
+                if group_is_exhausted {
+                    continue;
+                }
+                dbg!(&ch, &position);
+                accepting_states.insert(position);
+                number_of_accepting_states_in_group += 1;
+                group_is_exhausted = true;
+            }
+        }
+    }
+
+    accepting_states
 }
 
 fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
@@ -131,11 +184,12 @@ fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
     indexed_states
 }
 
+// TODO: remove the unused param later
 fn fill_sets(
     states: HashMap<u32, (char, SymbolType, u32)>,
-    accepting_states: &mut HashSet<u32>,
     transitions: &mut HashMap<(u32, char), Vec<u32>>,
 ) {
+    dbg!(&states);
     let mut start_states = HashSet::new();
 
     let amount_states = states.len() as u32;
@@ -164,10 +218,11 @@ fn fill_sets(
 
         for i in 0..group.len() {
             let state = group[i];
-            if let Some((_, symbol_type, _)) = states.get(&state) {
-                if symbol_type == &SymbolType::KleeneStar && i + 1 < group.len() {
-                    start_states.insert(group[i + 1]);
-                }
+            if let Some((_, symbol_type, _)) = states.get(&state)
+                && symbol_type == &SymbolType::KleeneStar
+                && i + 1 < group.len()
+            {
+                start_states.insert(group[i + 1]);
             }
         }
     }
@@ -185,8 +240,6 @@ fn fill_sets(
                         .entry((*state_id, *symbol))
                         .or_default()
                         .push(next_state);
-                } else {
-                    accepting_states.insert(*state_id);
                 }
             }
             SymbolType::KleeneStar => {
@@ -202,8 +255,6 @@ fn fill_sets(
                             .or_default()
                             .push(*next_state);
                     }
-                } else {
-                    accepting_states.insert(*state_id);
                 }
             }
         }
@@ -542,12 +593,34 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_accepting_states_too_many_brackets() {
+        let regex = "a*b|(c|d)|ef";
+        let accepting_states = compute_accepting_states(regex);
+
+        assert_eq!(accepting_states, HashSet::from([1, 2, 3, 5]))
+    }
+
+    #[test]
+    fn test_compute_accepting_states_escape_sequence() {
+        let regex = r"a\*b|cd\*|sdfe\|f";
+        let accepting_states = compute_accepting_states(regex);
+
+        assert_eq!(accepting_states, HashSet::from([3, 6, 12]))
+    }
+
+    #[test]
+    fn test_compute_accepting_states_complex() {
+        let regex = "a*b*c|d*e";
+        let accepting_states = compute_accepting_states(regex);
+
+        assert_eq!(accepting_states, HashSet::from([2, 4]))
+    }
+
+    #[test]
     fn test_fill_sets_too_many_brackets() {
         let states = index_states("a*b|(c|d)|ef");
-        let mut finite_states: HashSet<u32> = HashSet::new();
         let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
 
-        let expected_finite_set: HashSet<u32> = HashSet::from([1, 2, 3, 5]);
         let expected_transitions: HashMap<(u32, char), Vec<u32>> = HashMap::from([
             ((6, 'a'), vec![0]),
             ((6, 'b'), vec![1]),
@@ -558,19 +631,16 @@ mod tests {
             ((4, 'e'), vec![5]),
         ]);
 
-        fill_sets(states, &mut finite_states, &mut transitions);
+        fill_sets(states, &mut transitions);
 
-        assert_eq!(finite_states, expected_finite_set);
         assert_eq!(transitions, expected_transitions);
     }
 
     #[test]
     fn test_fill_sets_complex() {
         let states = index_states("a*b*c|d*e");
-        let mut finite_states: HashSet<u32> = HashSet::new();
         let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
 
-        let expected_finite_set: HashSet<u32> = HashSet::from([2, 4]);
         let expected_transitions = HashMap::from([
             ((5, 'a'), vec![0]),
             ((5, 'b'), vec![1]),
@@ -582,9 +652,8 @@ mod tests {
             ((3, 'd'), vec![3, 4]),
         ]);
 
-        fill_sets(states, &mut finite_states, &mut transitions);
+        fill_sets(states, &mut transitions);
 
-        assert_eq!(finite_states, expected_finite_set);
         assert_eq!(transitions, expected_transitions);
     }
 
