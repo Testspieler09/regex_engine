@@ -288,7 +288,7 @@ impl Regex {
     /// ```rust
     /// use regex_engine::{Regex, ConstructionType};
     ///
-    /// let regex = Regex::new("(a|b)*", ConstructionType::Thompson);
+    /// let regex = Regex::new("(a|b)*", ConstructionType::Thompson).expect("Valied regex");
     /// assert!(regex.is_match("abba"));
     /// assert!(!regex.is_match("abc"));
     /// ```
@@ -318,7 +318,7 @@ impl Regex {
     /// ```rust
     /// use regex_engine::{Regex, ConstructionType};
     ///
-    /// let regex = Regex::new("ab+", ConstructionType::Thompson);
+    /// let regex = Regex::new("ab+", ConstructionType::Thompson).expect("Valied regex");
     /// if let Some(matched) = regex.find("aabbcc") {
     ///     println!("Found: {}", matched);
     /// }

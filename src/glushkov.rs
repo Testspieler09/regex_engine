@@ -1,11 +1,12 @@
 use crate::{Dfa, is_valid_regex, normalise_regex};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-#[derive(Clone, Debug, PartialEq)]
-enum SymbolType {
-    Normal,
-    KleeneStar,
-    Escaped,
+#[derive(Debug, Clone)]
+enum RegexAst {
+    Char(char),
+    Concat(Vec<RegexAst>),
+    Alternation(Vec<RegexAst>),
+    KleeneStar(Box<RegexAst>),
 }
 
 #[derive(Debug)]
@@ -23,16 +24,15 @@ pub struct GlushkovDfa {
 impl Dfa for GlushkovDfa {
     fn new(regex: &str) -> Result<Self, String> {
         if !is_valid_regex(regex) {
-            return Err("{regex} is not a valid regular expression!".to_string());
+            return Err(format!("{regex} is not a valid regular expression!"));
         }
 
         let normalised_regex = normalise_regex(regex);
-        let regex_nfa = glushkov_construction(&normalised_regex);
-        dbg!(&regex_nfa);
-        let mut regex_dfa = nfa_no_epsilon_to_dfa(&regex_nfa);
-        // dbg!(&regex_dfa);
+        let ast = parse_regex(&normalised_regex)?;
+        let nfa = glushkov_construction(ast)?;
+        let mut regex_dfa = nfa_to_dfa(nfa);
+
         <Self as Dfa>::optimise_dfa(&mut regex_dfa);
-        // dbg!(&regex_dfa);
         Ok(regex_dfa)
     }
 
@@ -53,743 +53,502 @@ impl Dfa for GlushkovDfa {
     }
 }
 
-// GLUSHKOV CONSTRUCTION
-fn glushkov_construction(regex: &str) -> Nfa {
-    let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
-    let accepting_states: HashSet<u32> = compute_accepting_states(regex);
+// Parser for regex string to AST
+fn parse_regex(regex: &str) -> Result<RegexAst, String> {
+    let chars: Vec<char> = regex.chars().collect();
+    let (ast, pos) = parse_alternation(&chars, 0)?;
 
-    let states: HashMap<u32, (char, SymbolType, u32)> = index_states(regex);
+    if pos != chars.len() {
+        return Err("Unexpected characters at end of regex".to_string());
+    }
 
-    fill_sets(states, &mut transitions);
+    Ok(ast)
+}
 
-    Nfa {
+fn parse_alternation(chars: &[char], mut pos: usize) -> Result<(RegexAst, usize), String> {
+    let mut alternatives = Vec::new();
+
+    let (first_alt, new_pos) = parse_concatenation(chars, pos)?;
+    alternatives.push(first_alt);
+    pos = new_pos;
+
+    while pos < chars.len() && chars[pos] == '|' {
+        pos += 1; // skip '|'
+        let (alt, new_pos) = parse_concatenation(chars, pos)?;
+        alternatives.push(alt);
+        pos = new_pos;
+    }
+
+    if alternatives.len() == 1 {
+        Ok((alternatives.into_iter().next().unwrap(), pos))
+    } else {
+        Ok((RegexAst::Alternation(alternatives), pos))
+    }
+}
+
+fn parse_concatenation(chars: &[char], mut pos: usize) -> Result<(RegexAst, usize), String> {
+    let mut elements = Vec::new();
+
+    while pos < chars.len() && chars[pos] != '|' && chars[pos] != ')' {
+        let (element, new_pos) = parse_factor(chars, pos)?;
+        elements.push(element);
+        pos = new_pos;
+    }
+
+    // Handle empty concatenation (empty alternative)
+    if elements.is_empty() {
+        // Return an epsilon (empty string) represented as an empty concatenation
+        return Ok((RegexAst::Concat(vec![]), pos));
+    }
+
+    if elements.len() == 1 {
+        Ok((elements.into_iter().next().unwrap(), pos))
+    } else {
+        Ok((RegexAst::Concat(elements), pos))
+    }
+}
+
+fn parse_factor(chars: &[char], mut pos: usize) -> Result<(RegexAst, usize), String> {
+    if pos >= chars.len() {
+        return Err("Unexpected end of regex".to_string());
+    }
+
+    let (base, new_pos) = match chars[pos] {
+        '(' => {
+            pos += 1; // skip '('
+            let (inner, inner_pos) = parse_alternation(chars, pos)?;
+            if inner_pos >= chars.len() || chars[inner_pos] != ')' {
+                return Err("Unmatched opening parenthesis".to_string());
+            }
+            (inner, inner_pos + 1) // skip ')'
+        }
+        '\\' => {
+            if pos + 1 >= chars.len() {
+                return Err("Invalid escape sequence".to_string());
+            }
+            pos += 1; // skip '\'
+            (RegexAst::Char(chars[pos]), pos + 1)
+        }
+        c if c.is_ascii() && !"()|*+\\".contains(c) => (RegexAst::Char(c), pos + 1),
+        _ => {
+            return Err(format!("Unexpected character: {}", chars[pos]));
+        }
+    };
+
+    pos = new_pos;
+
+    // Check for Kleene star
+    if pos < chars.len() && chars[pos] == '*' {
+        pos += 1;
+        Ok((RegexAst::KleeneStar(Box::new(base)), pos))
+    } else {
+        Ok((base, pos))
+    }
+}
+
+fn glushkov_construction(ast: RegexAst) -> Result<Nfa, String> {
+    let mut state_counter = 0u32;
+    let mut state_to_char: HashMap<u32, char> = HashMap::new();
+
+    // Assign unique state numbers to each character occurrence
+    assign_positions(&ast, &mut state_counter, &mut state_to_char);
+
+    let start_state = state_counter;
+
+    // Compute First, Last, Follow sets - each with fresh position counter
+    let first_set = first(&ast);
+    let last_set = last(&ast);
+    let follow_map = follow(&ast);
+
+    // Build NFA
+    let mut transitions = HashMap::new();
+    let mut accepting_states = HashSet::new();
+
+    // Transitions from start state
+    for &state in &first_set {
+        if let Some(&ch) = state_to_char.get(&state) {
+            transitions
+                .entry((start_state, ch))
+                .or_insert_with(Vec::new)
+                .push(state);
+        }
+    }
+
+    // Internal transitions based on follow sets
+    for (state, follow_states) in follow_map {
+        for &follow_state in &follow_states {
+            if let Some(&ch) = state_to_char.get(&follow_state) {
+                transitions
+                    .entry((state, ch))
+                    .or_insert_with(Vec::new)
+                    .push(follow_state);
+            }
+        }
+    }
+
+    // Accepting states
+    if nullable(&ast) {
+        accepting_states.insert(start_state);
+    }
+    for &state in &last_set {
+        accepting_states.insert(state);
+    }
+
+    Ok(Nfa {
         transitions,
         accepting_states,
-    }
+    })
 }
 
-fn compute_accepting_states(regex: &str) -> HashSet<u32> {
-    // also need handling of escape sequence?!
-    let mut accepting_states = HashSet::new();
-    let mut number_of_accepting_states_in_group = 0;
-    let mut group_is_exhausted = false;
-    let mut last_element_was_seperator = false;
-    let num_unions = regex.chars().filter(|&c| matches!(c, '|'));
-    let mut position: u32 = regex
-        .chars()
-        .filter(|&c| !matches!(c, '(' | ')' | '|' | '*'))
-        .count() as u32;
+fn first(ast: &RegexAst) -> HashSet<u32> {
+    let mut positions = HashMap::new();
+    let mut counter = 0;
+    map_ast_to_positions(ast, &mut counter, &mut positions);
+    first_positions(ast, &positions)
+}
 
-    dbg!(regex);
+fn last(ast: &RegexAst) -> HashSet<u32> {
+    let mut positions = HashMap::new();
+    let mut counter = 0;
+    map_ast_to_positions(ast, &mut counter, &mut positions);
+    last_positions(ast, &positions)
+}
 
-    // check if after none ) a | is present
-    for ch in regex.chars().rev() {
-        match ch {
-            ')' => {
-                if !last_element_was_seperator {
-                    group_is_exhausted = number_of_accepting_states_in_group != 0;
-                }
-                last_element_was_seperator = true;
+fn follow(ast: &RegexAst) -> HashMap<u32, HashSet<u32>> {
+    let mut positions = HashMap::new();
+    let mut counter = 0;
+    map_ast_to_positions(ast, &mut counter, &mut positions);
+
+    let mut result = HashMap::new();
+    follow_positions(ast, &positions, &mut result);
+    result
+}
+
+// Helper function to create a mapping from AST nodes to their position ranges
+fn map_ast_to_positions(
+    ast: &RegexAst,
+    counter: &mut u32,
+    positions: &mut HashMap<*const RegexAst, (u32, u32)>,
+) {
+    let start_pos = *counter;
+
+    match ast {
+        RegexAst::Char(_) => {
+            *counter += 1;
+        }
+        RegexAst::Concat(elements) => {
+            for element in elements {
+                map_ast_to_positions(element, counter, positions);
             }
-            '|' => {
-                group_is_exhausted = false;
-                last_element_was_seperator = true;
+        }
+        RegexAst::Alternation(alternatives) => {
+            for alt in alternatives {
+                map_ast_to_positions(alt, counter, positions);
             }
-            '(' => group_is_exhausted = true,
-            '*' => {
-                // Should account for ba* -> b and a are accepting
-                last_element_was_seperator = false;
-            }
-            _ => {
-                if position != 0 {
-                    position -= 1;
-                } else {
+        }
+        RegexAst::KleeneStar(inner) => {
+            map_ast_to_positions(inner, counter, positions);
+        }
+    }
+
+    positions.insert(ast as *const RegexAst, (start_pos, *counter));
+}
+
+fn first_positions(
+    ast: &RegexAst,
+    positions: &HashMap<*const RegexAst, (u32, u32)>,
+) -> HashSet<u32> {
+    match ast {
+        RegexAst::Char(_) => {
+            let (start_pos, _) = positions[&(ast as *const RegexAst)];
+            let mut result = HashSet::new();
+            result.insert(start_pos);
+            result
+        }
+        RegexAst::Concat(elements) => {
+            let mut result = HashSet::new();
+            for element in elements {
+                result.extend(first_positions(element, positions));
+                if !nullable(element) {
                     break;
                 }
-
-                if group_is_exhausted {
-                    continue;
-                }
-                dbg!(&ch, &position);
-                accepting_states.insert(position);
-                number_of_accepting_states_in_group += 1;
-                group_is_exhausted = true;
             }
+            result
         }
+        RegexAst::Alternation(alternatives) => {
+            let mut result = HashSet::new();
+            for alt in alternatives {
+                result.extend(first_positions(alt, positions));
+            }
+            result
+        }
+        RegexAst::KleeneStar(inner) => first_positions(inner, positions),
     }
-
-    accepting_states
 }
 
-fn index_states(regex: &str) -> HashMap<u32, (char, SymbolType, u32)> {
-    let mut indexed_states: HashMap<u32, (char, SymbolType, u32)> = HashMap::new();
-    let mut symbol_type: SymbolType = SymbolType::Normal;
-    let mut group_stack: Vec<u32> = vec![0];
-    let mut idx: u32 = 0;
-    let mut next_group_id: u32 = 1;
-    let mut chars = regex.chars().peekable();
-
-    while let Some(symbol) = chars.next() {
-        if symbol_type == SymbolType::Escaped {
-            indexed_states.entry(idx).or_insert((
-                symbol,
-                symbol_type.clone(),
-                *group_stack.last().unwrap(),
-            ));
-            idx += 1;
-            symbol_type = SymbolType::Normal;
-            continue;
+fn last_positions(
+    ast: &RegexAst,
+    positions: &HashMap<*const RegexAst, (u32, u32)>,
+) -> HashSet<u32> {
+    match ast {
+        RegexAst::Char(_) => {
+            let (start_pos, _) = positions[&(ast as *const RegexAst)];
+            let mut result = HashSet::new();
+            result.insert(start_pos);
+            result
         }
-
-        match symbol {
-            '|' => {
-                // Start a new group for the next alternative
-                let new_group_id = next_group_id;
-                next_group_id += 1;
-                // Replace the current group on the stack with the new one
-                if let Some(last) = group_stack.last_mut() {
-                    *last = new_group_id;
+        RegexAst::Concat(elements) => {
+            let mut result = HashSet::new();
+            for element in elements.iter().rev() {
+                result.extend(last_positions(element, positions));
+                if !nullable(element) {
+                    break;
                 }
             }
-            '(' => {
-                // Push the next group ID onto the stack for this grouping level
-                let new_group_id = next_group_id;
-                next_group_id += 1;
-                group_stack.push(new_group_id);
-            }
-            ')' => {
-                // Pop the current group and return to parent group
-                group_stack.pop();
-            }
-            '*' => {
-                symbol_type = SymbolType::Normal;
-                continue;
-            }
-            '\\' => symbol_type = SymbolType::Escaped,
-            _ => {
-                if let Some(next_symbol) = chars.peek()
-                    && matches!(*next_symbol, '*')
-                {
-                    symbol_type = SymbolType::KleeneStar
-                }
-                indexed_states.entry(idx).or_insert((
-                    symbol,
-                    symbol_type.clone(),
-                    *group_stack.last().unwrap(),
-                ));
-                idx += 1;
-            }
+            result
         }
+        RegexAst::Alternation(alternatives) => {
+            let mut result = HashSet::new();
+            for alt in alternatives {
+                result.extend(last_positions(alt, positions));
+            }
+            result
+        }
+        RegexAst::KleeneStar(inner) => last_positions(inner, positions),
     }
-    indexed_states
 }
 
-// TODO: remove the unused param later
-fn fill_sets(
-    states: HashMap<u32, (char, SymbolType, u32)>,
-    transitions: &mut HashMap<(u32, char), Vec<u32>>,
+fn follow_positions(
+    ast: &RegexAst,
+    positions: &HashMap<*const RegexAst, (u32, u32)>,
+    result: &mut HashMap<u32, HashSet<u32>>,
 ) {
-    dbg!(&states);
-    let mut start_states = HashSet::new();
-
-    let amount_states = states.len() as u32;
-    if amount_states == 0 {
-        return;
-    }
-
-    // Group states by their group index
-    let mut groups: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (state_id, (_, _, group_idx)) in &states {
-        groups.entry(*group_idx).or_default().push(*state_id);
-    }
-
-    // Sort states within each group
-    for group in groups.values_mut() {
-        group.sort();
-    }
-
-    // Determine start states (first state of each group)
-    for group in groups.values() {
-        if group.is_empty() {
-            continue;
+    match ast {
+        RegexAst::Char(_) => {
+            // Base case - no follow computation needed
         }
-
-        start_states.insert(group[0]);
-
-        for i in 0..group.len() {
-            let state = group[i];
-            if let Some((_, symbol_type, _)) = states.get(&state)
-                && symbol_type == &SymbolType::KleeneStar
-                && i + 1 < group.len()
-            {
-                start_states.insert(group[i + 1]);
+        RegexAst::Concat(elements) => {
+            // Process each element recursively
+            for element in elements {
+                follow_positions(element, positions, result);
             }
-        }
-    }
 
-    // Build transitions and determine accepting states
-    for (state_id, (symbol, symbol_type, group_idx)) in &states {
-        let current_group = &groups[group_idx];
-        let pos_in_group = current_group.iter().position(|&x| x == *state_id).unwrap();
+            // Add follow relationships between consecutive elements
+            for i in 0..elements.len() {
+                let last_i = last_positions(&elements[i], positions);
 
-        match symbol_type {
-            SymbolType::Normal | SymbolType::Escaped => {
-                if pos_in_group + 1 < current_group.len() {
-                    let next_state = current_group[pos_in_group + 1];
-                    transitions
-                        .entry((*state_id, *symbol))
-                        .or_default()
-                        .push(next_state);
-                }
-            }
-            SymbolType::KleeneStar => {
-                transitions
-                    .entry((*state_id, *symbol))
-                    .or_default()
-                    .push(*state_id);
+                // For each subsequent element j > i
+                for j in (i + 1)..elements.len() {
+                    // Check if all elements between i and j are nullable
+                    let all_between_nullable = elements[(i + 1)..j].iter().all(nullable);
 
-                if pos_in_group + 1 < current_group.len() {
-                    for next_state in current_group.iter().skip(pos_in_group + 1) {
-                        transitions
-                            .entry((*state_id, *symbol))
-                            .or_default()
-                            .push(*next_state);
+                    if j == i + 1 || all_between_nullable {
+                        let first_j = first_positions(&elements[j], positions);
+
+                        // Add follow relationships from last(i) to first(j)
+                        for &last_state in &last_i {
+                            result.entry(last_state).or_default().extend(&first_j);
+                        }
+                    }
+
+                    // If element j is not nullable, we can't skip further
+                    if !nullable(&elements[j]) {
+                        break;
                     }
                 }
             }
         }
-    }
+        RegexAst::Alternation(alternatives) => {
+            for alt in alternatives {
+                follow_positions(alt, positions, result);
+            }
+        }
+        RegexAst::KleeneStar(inner) => {
+            follow_positions(inner, positions, result);
 
-    // Setup virtual (start-)state
-    let virtual_start = states.keys().max().copied().unwrap_or(0) + 1;
+            // Kleene star: last positions can loop back to first positions
+            let inner_last = last_positions(inner, positions);
+            let inner_first = first_positions(inner, positions);
 
-    let symbol_to_first_state: Vec<(u32, char)> = start_states
-        .iter()
-        .map(|&s| (s, states.get(&s).expect("Expected an entry").0))
-        .collect();
-
-    for (first_state, symbol) in symbol_to_first_state {
-        transitions
-            .entry((virtual_start, symbol))
-            .or_default()
-            .push(first_state);
-    }
-}
-// END GLUSHKOV CONSTRUCTION
-
-fn nfa_no_epsilon_to_dfa(nfa: &Nfa) -> GlushkovDfa {
-    let mut dfa_transitions = HashMap::new();
-    let mut dfa_accepting_states = HashSet::new();
-
-    // Map from sorted vector of NFA states to DFA state ID (for hashable key)
-    let mut nfa_states_to_dfa_state: HashMap<Vec<u32>, u32> = HashMap::new();
-    let mut next_dfa_state_id = 0u32;
-    let mut work_queue = VecDeque::new();
-
-    // Helper function to convert HashSet to sorted Vec for use as HashMap key
-    let set_to_sorted_vec = |set: &HashSet<u32>| -> Vec<u32> {
-        let mut vec: Vec<u32> = set.iter().cloned().collect();
-        vec.sort_unstable();
-        vec
-    };
-
-    // Get all possible input symbols from NFA transitions
-    let alphabet: HashSet<char> = nfa.transitions.keys().map(|(_, symbol)| *symbol).collect();
-
-    // Find all states that exist in the NFA
-    let mut all_nfa_states = HashSet::new();
-    for &(state, _) in nfa.transitions.keys() {
-        all_nfa_states.insert(state);
-    }
-    for target_states in nfa.transitions.values() {
-        for &state in target_states {
-            all_nfa_states.insert(state);
+            for &last_state in &inner_last {
+                result.entry(last_state).or_default().extend(&inner_first);
+            }
         }
     }
-    for &state in &nfa.accepting_states {
-        all_nfa_states.insert(state);
+}
+
+fn nullable(ast: &RegexAst) -> bool {
+    match ast {
+        RegexAst::Char(_) => false,
+        RegexAst::Concat(elements) => {
+            // Empty concat is nullable (represents epsilon)
+            elements.is_empty() || elements.iter().all(nullable)
+        }
+        RegexAst::Alternation(alternatives) => alternatives.iter().any(nullable),
+        RegexAst::KleeneStar(_) => true,
+    }
+}
+
+fn assign_positions(ast: &RegexAst, counter: &mut u32, state_to_char: &mut HashMap<u32, char>) {
+    match ast {
+        RegexAst::Char(ch) => {
+            let state = *counter;
+            *counter += 1;
+            state_to_char.insert(state, *ch);
+        }
+        RegexAst::Concat(elements) => {
+            for element in elements {
+                assign_positions(element, counter, state_to_char);
+            }
+        }
+        RegexAst::Alternation(alternatives) => {
+            for alt in alternatives {
+                assign_positions(alt, counter, state_to_char);
+            }
+        }
+        RegexAst::KleeneStar(inner) => {
+            assign_positions(inner, counter, state_to_char);
+        }
+    }
+}
+
+fn nfa_to_dfa(nfa: Nfa) -> GlushkovDfa {
+    let mut dfa_transitions = HashMap::new();
+    let mut dfa_accepting_states = HashSet::new();
+    let mut state_sets_to_dfa_state: HashMap<BTreeSet<u32>, u32> = HashMap::new();
+    let mut queue = VecDeque::new();
+    let mut next_dfa_state = 0u32;
+
+    // Get alphabet from NFA
+    let alphabet: HashSet<char> = nfa.transitions.keys().map(|(_, ch)| *ch).collect();
+
+    // Find start state (highest numbered state in NFA)
+    let mut all_nfa_states = HashSet::new();
+
+    for &(from_state, _) in nfa.transitions.keys() {
+        all_nfa_states.insert(from_state);
+    }
+    for target_states in nfa.transitions.values() {
+        for &to_state in target_states {
+            all_nfa_states.insert(to_state);
+        }
+    }
+    for &accepting_state in &nfa.accepting_states {
+        all_nfa_states.insert(accepting_state);
     }
 
-    // In a Glushkov NFA, state 0 is always the start state
-    let start_state = 0;
+    let start_state = all_nfa_states.iter().max().copied().unwrap_or(0);
 
-    // Verify that state 0 exists in the NFA
-    if !all_nfa_states.contains(&start_state) {
-        panic!("Expected start state 0 not found in NFA states: {all_nfa_states:?}");
-    }
-
-    let start_state_set = {
-        let mut set = HashSet::new();
+    let start_set: BTreeSet<u32> = {
+        let mut set = BTreeSet::new();
         set.insert(start_state);
         set
     };
 
-    // Create initial DFA state
-    let start_dfa_state = next_dfa_state_id;
-    next_dfa_state_id += 1;
+    state_sets_to_dfa_state.insert(start_set.clone(), next_dfa_state);
+    queue.push_back(start_set);
+    next_dfa_state += 1;
 
-    let start_state_key = set_to_sorted_vec(&start_state_set);
-    nfa_states_to_dfa_state.insert(start_state_key, start_dfa_state);
-    work_queue.push_back(start_state_set);
-
-    // Process each DFA state
-    while let Some(current_nfa_states) = work_queue.pop_front() {
-        let current_state_key = set_to_sorted_vec(&current_nfa_states);
-        let current_dfa_state = nfa_states_to_dfa_state[&current_state_key];
+    while let Some(current_set) = queue.pop_front() {
+        let current_dfa_state = state_sets_to_dfa_state[&current_set];
 
         // Check if this DFA state should be accepting
-        if current_nfa_states
+        if current_set
             .iter()
-            .any(|&state| nfa.accepting_states.contains(&state))
+            .any(|&s| nfa.accepting_states.contains(&s))
         {
             dfa_accepting_states.insert(current_dfa_state);
         }
 
-        // For each symbol in the alphabet
+        // For each symbol in alphabet
         for &symbol in &alphabet {
-            let mut next_nfa_states = HashSet::new();
+            let mut next_set = BTreeSet::new();
 
-            // Collect all states reachable from current_nfa_states via symbol
-            for &nfa_state in &current_nfa_states {
-                if let Some(target_states) = nfa.transitions.get(&(nfa_state, symbol)) {
-                    for &target_state in target_states {
-                        next_nfa_states.insert(target_state);
-                    }
+            // Collect all states reachable via this symbol
+            for &state in &current_set {
+                if let Some(targets) = nfa.transitions.get(&(state, symbol)) {
+                    next_set.extend(targets);
                 }
             }
 
-            // Skip if no transitions exist for this symbol
-            if next_nfa_states.is_empty() {
-                continue;
-            }
-
-            // Get or create DFA state for this set of NFA states
-            let next_state_key = set_to_sorted_vec(&next_nfa_states);
-            let next_dfa_state =
-                if let Some(&existing_state) = nfa_states_to_dfa_state.get(&next_state_key) {
-                    existing_state
+            if !next_set.is_empty() {
+                let next_dfa_state = if let Some(&existing) = state_sets_to_dfa_state.get(&next_set)
+                {
+                    existing
                 } else {
-                    let new_state = next_dfa_state_id;
-                    next_dfa_state_id += 1;
-
-                    nfa_states_to_dfa_state.insert(next_state_key.clone(), new_state);
-                    work_queue.push_back(next_nfa_states);
-
+                    let new_state = next_dfa_state;
+                    next_dfa_state += 1;
+                    state_sets_to_dfa_state.insert(next_set.clone(), new_state);
+                    queue.push_back(next_set.clone());
                     new_state
                 };
 
-            // Add transition to DFA
-            dfa_transitions.insert((current_dfa_state, symbol), next_dfa_state);
+                dfa_transitions.insert((current_dfa_state, symbol), next_dfa_state);
+            }
         }
     }
 
-    GlushkovDfa {
-        transitions: dfa_transitions,
-        accepting_states: dfa_accepting_states,
-    }
+    // Normalize to start from state 0
+    normalize_dfa_states(dfa_transitions, dfa_accepting_states)
 }
 
-// fn nfa_no_epsilon_to_dfa(nfa: &Nfa) -> GlushkovDfa {
-//     let mut dfa_transitions = HashMap::new();
-//     let mut dfa_accepting_states = HashSet::new();
-//
-//     // Map from DFA state ID to the set of NFA states it represents
-//     let mut dfa_state_to_nfa_states: HashMap<u32, HashSet<u32>> = HashMap::new();
-//     // Map from sorted vector of NFA states to DFA state ID (for hashable key)
-//     let mut nfa_states_to_dfa_state: HashMap<Vec<u32>, u32> = HashMap::new();
-//
-//     let mut next_dfa_state_id = 0u32;
-//     let mut work_queue = VecDeque::new();
-//
-//     // Helper function to convert HashSet to sorted Vec for use as HashMap key
-//     let set_to_sorted_vec = |set: &HashSet<u32>| -> Vec<u32> {
-//         let mut vec: Vec<u32> = set.iter().cloned().collect();
-//         vec.sort_unstable();
-//         vec
-//     };
-//
-//     // Get all possible input symbols from NFA transitions
-//     let alphabet: HashSet<char> = nfa.transitions.keys().map(|(_, symbol)| *symbol).collect();
-//
-//     // Find the start state (assuming state 0 is the start state)
-//     let start_state_set = {
-//         let mut set = HashSet::new();
-//         set.insert(0u32);
-//         set
-//     };
-//
-//     // Create initial DFA state
-//     let start_dfa_state = next_dfa_state_id;
-//     next_dfa_state_id += 1;
-//
-//     let start_state_key = set_to_sorted_vec(&start_state_set);
-//     dfa_state_to_nfa_states.insert(start_dfa_state, start_state_set.clone());
-//     nfa_states_to_dfa_state.insert(start_state_key, start_dfa_state);
-//     work_queue.push_back(start_state_set);
-//
-//     // Process each DFA state
-//     while let Some(current_nfa_states) = work_queue.pop_front() {
-//         let current_state_key = set_to_sorted_vec(&current_nfa_states);
-//         let current_dfa_state = nfa_states_to_dfa_state[&current_state_key];
-//
-//         // Check if this DFA state should be accepting
-//         if current_nfa_states
-//             .iter()
-//             .any(|&state| nfa.accepting_states.contains(&state))
-//         {
-//             dfa_accepting_states.insert(current_dfa_state);
-//         }
-//
-//         // For each symbol in the alphabet
-//         for &symbol in &alphabet {
-//             let mut next_nfa_states = HashSet::new();
-//
-//             // Collect all states reachable from current_nfa_states via symbol
-//             for &nfa_state in &current_nfa_states {
-//                 if let Some(target_states) = nfa.transitions.get(&(nfa_state, symbol)) {
-//                     for &target_state in target_states {
-//                         next_nfa_states.insert(target_state);
-//                     }
-//                 }
-//             }
-//
-//             // Skip if no transitions exist for this symbol
-//             if next_nfa_states.is_empty() {
-//                 continue;
-//             }
-//
-//             // Get or create DFA state for this set of NFA states
-//             let next_state_key = set_to_sorted_vec(&next_nfa_states);
-//             let next_dfa_state =
-//                 if let Some(&existing_state) = nfa_states_to_dfa_state.get(&next_state_key) {
-//                     existing_state
-//                 } else {
-//                     let new_state = next_dfa_state_id;
-//                     next_dfa_state_id += 1;
-//
-//                     dfa_state_to_nfa_states.insert(new_state, next_nfa_states.clone());
-//                     nfa_states_to_dfa_state.insert(next_state_key, new_state);
-//                     work_queue.push_back(next_nfa_states);
-//
-//                     new_state
-//                 };
-//
-//             // Add transition to DFA
-//             dfa_transitions.insert((current_dfa_state, symbol), next_dfa_state);
-//         }
-//     }
-//
-//     GlushkovDfa {
-//         transitions: dfa_transitions,
-//         accepting_states: dfa_accepting_states,
-//     }
-// }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_index_single_character() {
-        let expected = HashMap::from([(0, ('a', SymbolType::Normal, 0))]);
-
-        let result = index_states("a");
-        assert_eq!(result, expected, "Mismatch in single character test");
-    }
-
-    #[test]
-    fn test_nfa_single_character() {
-        let expected_finite = HashSet::from([0]);
-        let expected_transitions: HashMap<(u32, char), Vec<u32>> =
-            HashMap::from([((1, 'a'), vec![0])]);
-
-        let result = glushkov_construction("a");
-        assert_eq!(
-            result.transitions, expected_transitions,
-            "Mismatch in single character test"
-        );
-        assert_eq!(
-            result.accepting_states, expected_finite,
-            "Mismatch in single character test"
-        );
-    }
-
-    #[test]
-    fn test_nfa_single_character_kleene_star() {
-        let expected_finite = HashSet::from([0]);
-        let expected_transitions: HashMap<(u32, char), Vec<u32>> =
-            HashMap::from([((0, 'a'), vec![0]), ((1, 'a'), vec![0])]);
-
-        let result = glushkov_construction("a*");
-        assert_eq!(
-            result.transitions, expected_transitions,
-            "Mismatch in single character test"
-        );
-        assert_eq!(
-            result.accepting_states, expected_finite,
-            "Mismatch in single character test"
-        );
-    }
-
-    #[test]
-    fn test_index_kleene_star() {
-        let expected = HashMap::from([(0, ('a', SymbolType::KleeneStar, 0))]);
-
-        let result = index_states("a*");
-        assert_eq!(result, expected, "Mismatch in kleene star test");
-    }
-
-    #[test]
-    fn test_index_union_and_groups() {
-        let expected = HashMap::from([
-            (0, ('a', SymbolType::Normal, 1)),
-            (1, ('b', SymbolType::Normal, 2)),
-        ]);
-
-        let result = index_states("(a|b)");
-        assert_eq!(result, expected, "Mismatch in union and groups test");
-    }
-
-    #[test]
-    fn test_index_escaped_character() {
-        let expected = HashMap::from([(0, ('a', SymbolType::Escaped, 0))]);
-
-        let result = index_states("\\a");
-        assert_eq!(result, expected, "Mismatch in escaped character test");
-    }
-
-    #[test]
-    fn test_index_mixed_regex() {
-        let expected = HashMap::from([
-            (0, ('a', SymbolType::Normal, 0)),
-            (1, ('*', SymbolType::Escaped, 0)),
-            (2, ('b', SymbolType::Normal, 0)),
-            (3, ('c', SymbolType::KleeneStar, 0)),
-            (4, ('d', SymbolType::Normal, 0)),
-            (5, ('e', SymbolType::Normal, 1)),
-            (6, ('f', SymbolType::Normal, 2)),
-            (7, ('g', SymbolType::Normal, 4)),
-            (8, ('h', SymbolType::Normal, 5)),
-            (9, ('i', SymbolType::Normal, 0)),
-        ]);
-
-        let result = index_states("a\\*bc*d(e|f|(g|h))i");
-        assert_eq!(result, expected, "Mismatch in mixed regex test");
-    }
-
-    #[test]
-    fn test_index_too_many_brackets() {
-        let expected = HashMap::from([
-            (0, ('a', SymbolType::KleeneStar, 0)),
-            (1, ('b', SymbolType::Normal, 0)),
-            (2, ('c', SymbolType::Normal, 3)),
-            (3, ('d', SymbolType::Normal, 4)),
-            (4, ('e', SymbolType::Normal, 5)),
-            (5, ('f', SymbolType::Normal, 5)),
-        ]);
-
-        let result = index_states("a*b|((c|d))|ef");
-        assert_eq!(result, expected, "Mismatch in mixed regex test");
-    }
-
-    #[test]
-    fn test_compute_accepting_states_too_many_brackets() {
-        let regex = "a*b|(c|d)|ef";
-        let accepting_states = compute_accepting_states(regex);
-
-        assert_eq!(accepting_states, HashSet::from([1, 2, 3, 5]))
-    }
-
-    #[test]
-    fn test_compute_accepting_states_escape_sequence() {
-        let regex = r"a\*b|cd\*|sdfe\|f";
-        let accepting_states = compute_accepting_states(regex);
-
-        assert_eq!(accepting_states, HashSet::from([3, 6, 12]))
-    }
-
-    #[test]
-    fn test_compute_accepting_states_complex() {
-        let regex = "a*b*c|d*e";
-        let accepting_states = compute_accepting_states(regex);
-
-        assert_eq!(accepting_states, HashSet::from([2, 4]))
-    }
-
-    #[test]
-    fn test_fill_sets_too_many_brackets() {
-        let states = index_states("a*b|(c|d)|ef");
-        let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
-
-        let expected_transitions: HashMap<(u32, char), Vec<u32>> = HashMap::from([
-            ((6, 'a'), vec![0]),
-            ((6, 'b'), vec![1]),
-            ((6, 'c'), vec![2]),
-            ((6, 'd'), vec![3]),
-            ((6, 'e'), vec![4]),
-            ((0, 'a'), vec![0, 1]),
-            ((4, 'e'), vec![5]),
-        ]);
-
-        fill_sets(states, &mut transitions);
-
-        assert_eq!(transitions, expected_transitions);
-    }
-
-    #[test]
-    fn test_fill_sets_complex() {
-        let states = index_states("a*b*c|d*e");
-        let mut transitions: HashMap<(u32, char), Vec<u32>> = HashMap::new();
-
-        let expected_transitions = HashMap::from([
-            ((5, 'a'), vec![0]),
-            ((5, 'b'), vec![1]),
-            ((5, 'c'), vec![2]),
-            ((5, 'd'), vec![3]),
-            ((5, 'e'), vec![4]),
-            ((0, 'a'), vec![0, 1, 2]),
-            ((1, 'b'), vec![1, 2]),
-            ((3, 'd'), vec![3, 4]),
-        ]);
-
-        fill_sets(states, &mut transitions);
-
-        assert_eq!(transitions, expected_transitions);
-    }
-
-    #[test]
-    fn nfa_to_dfa_simple_test() {
-        // NFA that accepts exactly "a"
-        // State 0 --a--> State 1 (accepting)
-        let input_nfa = Nfa {
-            transitions: HashMap::from([((0, 'a'), vec![1])]),
-            accepting_states: HashSet::from([1]),
+fn normalize_dfa_states(
+    transitions: HashMap<(u32, char), u32>,
+    accepting_states: HashSet<u32>,
+) -> GlushkovDfa {
+    if transitions.is_empty() && accepting_states.is_empty() {
+        return GlushkovDfa {
+            transitions,
+            accepting_states,
         };
-
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        let expected_transitions = HashMap::from([((0, 'a'), 1)]);
-        let expected_accepting_states = HashSet::from([1]);
-
-        assert_eq!(expected_transitions, generated_dfa.transitions);
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
     }
 
-    #[test]
-    fn nfa_to_dfa_sequence_test() {
-        // NFA that accepts exactly "ab"
-        // State 0 --a--> State 1 --b--> State 2 (accepting)
-        let input_nfa = Nfa {
-            transitions: HashMap::from([((0, 'a'), vec![1]), ((1, 'b'), vec![2])]),
-            accepting_states: HashSet::from([2]),
+    // Find all states
+    let mut all_states = HashSet::new();
+    for &(from, _) in transitions.keys() {
+        all_states.insert(from);
+    }
+    for &to in transitions.values() {
+        all_states.insert(to);
+    }
+    all_states.extend(&accepting_states);
+
+    if all_states.is_empty() {
+        return GlushkovDfa {
+            transitions,
+            accepting_states,
         };
-
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        let expected_transitions = HashMap::from([((0, 'a'), 1), ((1, 'b'), 2)]);
-        let expected_accepting_states = HashSet::from([2]);
-
-        assert_eq!(expected_transitions, generated_dfa.transitions);
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
     }
 
-    #[test]
-    fn nfa_to_dfa_alternation_test() {
-        // NFA that accepts "a" or "b"
-        // State 0 --a--> State 1 (accepting)
-        // State 0 --b--> State 2 (accepting)
-        let input_nfa = Nfa {
-            transitions: HashMap::from([((0, 'a'), vec![1]), ((0, 'b'), vec![2])]),
-            accepting_states: HashSet::from([1, 2]),
-        };
+    // Create mapping with 0 as start state
+    let start_state = *all_states.iter().min().unwrap();
+    let mut state_mapping = HashMap::new();
+    state_mapping.insert(start_state, 0);
 
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        let expected_transitions = [
-            HashMap::from([((0, 'a'), 1), ((0, 'b'), 2)]),
-            HashMap::from([((0, 'a'), 2), ((0, 'b'), 1)]),
-        ];
-        let expected_accepting_states = HashSet::from([1, 2]);
-
-        assert!(
-            generated_dfa.transitions == expected_transitions[0]
-                || generated_dfa.transitions == expected_transitions[1],
-            "generated_dfa.transitions did not match either expected set"
-        );
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
+    let mut next_state = 1;
+    for &state in &all_states {
+        if state != start_state {
+            state_mapping.insert(state, next_state);
+            next_state += 1;
+        }
     }
 
-    #[test]
-    fn nfa_to_dfa_nondeterministic_test() {
-        // NFA with nondeterministic transition
-        // State 0 --a--> State 1, State 2
-        // State 1 --b--> State 3 (accepting)
-        // State 2 --c--> State 3 (accepting)
-        let input_nfa = Nfa {
-            transitions: HashMap::from([
-                ((0, 'a'), vec![1, 2]),
-                ((1, 'b'), vec![3]),
-                ((2, 'c'), vec![3]),
-            ]),
-            accepting_states: HashSet::from([3]),
-        };
-
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        // After 'a' from state 0, we should be in a state representing {1, 2}
-        // Let's call this combined state "1" in the DFA
-        let expected_transitions = HashMap::from([
-            ((0, 'a'), 1), // {0} --a--> {1,2} (DFA state 1)
-            ((1, 'b'), 2), // {1,2} --b--> {3} (DFA state 2)
-            ((1, 'c'), 2), // {1,2} --c--> {3} (DFA state 2)
-        ]);
-        let expected_accepting_states = HashSet::from([2]); // DFA state 2 represents {3}
-
-        assert_eq!(expected_transitions, generated_dfa.transitions);
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
+    // Remap transitions
+    let mut new_transitions = HashMap::new();
+    for ((from, symbol), to) in transitions {
+        let new_from = state_mapping[&from];
+        let new_to = state_mapping[&to];
+        new_transitions.insert((new_from, symbol), new_to);
     }
 
-    #[test]
-    fn nfa_to_dfa_multiple_accepting_test() {
-        // NFA where multiple paths lead to accepting states
-        // State 0 --a--> State 1 (accepting)
-        // State 0 --a--> State 2 --b--> State 3 (accepting)
-        let input_nfa = Nfa {
-            transitions: HashMap::from([((0, 'a'), vec![1, 2]), ((2, 'b'), vec![3])]),
-            accepting_states: HashSet::from([1, 3]),
-        };
-
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        // After 'a' from state 0, we're in state representing {1, 2}
-        // This should be accepting because it contains state 1
-        let expected_transitions = HashMap::from([
-            ((0, 'a'), 1), // {0} --a--> {1,2} (DFA state 1)
-            ((1, 'b'), 2), // {1,2} --b--> {3} (DFA state 2)
-        ]);
-        let expected_accepting_states = HashSet::from([1, 2]); // Both DFA states are accepting
-
-        assert_eq!(expected_transitions, generated_dfa.transitions);
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
+    // Remap accepting states
+    let mut new_accepting_states = HashSet::new();
+    for state in accepting_states {
+        new_accepting_states.insert(state_mapping[&state]);
     }
 
-    #[test]
-    fn nfa_to_dfa_self_loop_test() {
-        // NFA with self-loop: accepts a*
-        // State 0 (accepting) --a--> State 0
-        let input_nfa = Nfa {
-            transitions: HashMap::from([((0, 'a'), vec![0])]),
-            accepting_states: HashSet::from([0]),
-        };
-
-        let generated_dfa = nfa_no_epsilon_to_dfa(&input_nfa);
-
-        let expected_transitions = HashMap::from([
-            ((0, 'a'), 0), // Self-loop
-        ]);
-        let expected_accepting_states = HashSet::from([0]);
-
-        assert_eq!(expected_transitions, generated_dfa.transitions);
-        assert_eq!(expected_accepting_states, generated_dfa.accepting_states);
+    GlushkovDfa {
+        transitions: new_transitions,
+        accepting_states: new_accepting_states,
     }
 }
