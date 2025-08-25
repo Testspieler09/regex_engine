@@ -1,0 +1,29 @@
+[package]
+name = "regex_engine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = "0.4"
+
+[dependencies.regex_engine]
+path = ".."
+
+[[bin]]
+name = "regex_thompson"
+path = "fuzz_targets/regex_thompson.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "regex_glushkov"
+path = "fuzz_targets/regex_glushkov.rs"
+test = false
+doc = false
+bench = false
