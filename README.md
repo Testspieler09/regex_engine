@@ -30,12 +30,12 @@ This is a very simple regex engine implemented in Rust. It is designed to parse 
 Here is a basic example of how to use the regex engine in your Rust code:
 
 ```rust
-use regex_engine::Regex;
+use regex_engine::{Regex, ConstructionType};
 
 fn main() {
     let pattern = "a*b+";
     let text = "aaabbb";
-    let engine = Regex::new(pattern);
+    let engine = Regex::new(pattern, ConstructionType::Glushkov).expect("Valid regex");
 
     if engine.is_match(text) {
         println!("The text matches the pattern!");
