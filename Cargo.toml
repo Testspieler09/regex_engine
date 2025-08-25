@@ -10,3 +10,9 @@ regex = "1.11.1"
 [[bench]]
 name = "regex_benchmark"
 harness = false
+
+[profile.release]
+debug = true
+
+[lib]
+name = "regex_engine"

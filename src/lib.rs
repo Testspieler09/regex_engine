@@ -451,7 +451,9 @@ pub fn normalise_regex(regex: &str) -> String {
                     }
                 }
                 _ => {
-                    normalised.insert(normalised.len() - 1, '(');
+                    if normalised.len() > 0 {
+                        normalised.insert(normalised.len() - 1, '(');
+                    }
                 }
             }
             normalised.push_str("|)");
